@@ -1,0 +1,16 @@
+// Custom protobuf options that tell the code generator how to map a field
+// in Elasticsearch, when the default mapping for its protobuf type isn't
+// what you want.
+//
+//   Position position = 6 [(elk.field_type) = "geo_point"];
+syntax = "proto3";
+
+package elk;
+
+import "google/protobuf/descriptor.proto";
+
+extend google.protobuf.FieldOptions {
+  // Elasticsearch field type to use instead of the default, e.g. "geo_point",
+  // "text" or "ip". Field numbers 50000-99999 are reserved for custom options.
+  string field_type = 50001;
+}

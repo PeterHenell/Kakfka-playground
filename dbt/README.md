@@ -3,10 +3,14 @@
 Turns the Parquet files written by the parquet consumer into tables that are
 easy to analyse. The same project runs in two places:
 
-- **Locally on DuckDB**: an in-process database stored in
-  `../data/vehicle_telemetry.duckdb`. Nothing to install besides dbt.
+- **Locally on Apache Spark**: dbt starts Spark inside its own process
+  (dbt-spark's `session` method, i.e. PySpark). Tables are stored as Parquet
+  files in `../data/spark/warehouse`, and the table catalog in
+  `../data/spark/metastore_db`.
 - **On Databricks**: deployed as a Databricks Asset Bundle (DAB), running on
   a SQL warehouse and reading the Parquet files from a Unity Catalog Volume.
+
+Both are Spark SQL, so the models are the same SQL in both places.
 
 ## Models
 
@@ -19,15 +23,20 @@ Parquet files ──> stg_vehicle_telemetry ──┬──> dim_vehicles       
 
 - `stg_vehicle_telemetry` removes duplicates. Both consumers deliver
   *at-least-once*, so a message can show up in more than one Parquet file.
-  It also computes the distance driven since each vehicle's previous reading.
-- The raw files are read through the `telemetry_source()` macro, and arrays
-  are unnested with `explode()`. Both macros are *dispatched*: dbt picks the
-  DuckDB or the Databricks implementation depending on the adapter. The rest
-  of the SQL is the same on both engines.
+  It also computes the distance driven since each vehicle's previous reading,
+  and lower-cases the protobuf enum names (`HARSH_BRAKING` → `harsh_braking`).
+- The raw files are read through the `telemetry_source()` macro. It is
+  *dispatched*: dbt picks the Spark or the Databricks implementation
+  depending on the adapter. Both merge the schemas of the Parquet files, so
+  files written before and after a change to the `.proto` file can be read
+  together. Columns missing from older files are `null`.
+- The staging model lists the columns it uses. When you add a field to the
+  `.proto` file, it is available in `telemetry_source()` right away; add it
+  to the staging model to use it downstream.
 - Tests (`dbt build` runs them) check uniqueness, not-null columns, accepted
   values and relationships. See the `_*.yml` files next to the models.
 
-## Running locally with DuckDB
+## Running locally with Spark
 
 The easiest way is through Docker Compose, from the repository root:
 
@@ -39,19 +48,32 @@ docker compose run --rm dbt show --inline "select * from {{ ref('fct_vehicle_eve
 
 The parquet consumer writes a file every 60 seconds, so give it a minute
 after starting the stack before the first build. Run `build` again to pick up
-new data.
+new data. Starting Spark takes a few seconds, so a build takes about half a
+minute.
 
-Or run dbt on your machine, from this folder:
+To explore the tables with SQL, open a Spark SQL shell:
 
 ```bash
+docker compose run --rm spark-sql
+spark-sql (default)> show tables in vehicle_telemetry;
+spark-sql (default)> select * from vehicle_telemetry.vehicle_latest_status;
+```
+
+The table catalog is an embedded (Derby) database that only one process can
+open at a time, so don't run dbt and the shell at the same time.
+
+Or run dbt on your machine, from this folder. That needs Java 17 or 21, and a
+separate virtual environment from the producer and consumers, because dbt
+and the protobuf tools need different versions of the protobuf library:
+
+```bash
+python -m venv .venv-dbt
+source .venv-dbt/bin/activate
 pip install -r requirements.txt
 dbt build
 ```
 
-`profiles.yml` in this folder points dbt at DuckDB. To explore the results
-with SQL, open the database with the [DuckDB CLI](https://duckdb.org/docs/installation/)
-(`duckdb ../data/vehicle_telemetry.duckdb`). Stop any running dbt command
-first, because only one process can write to the file at a time.
+`profiles.yml` in this folder configures the local Spark session.
 
 ## Deploying to Databricks as an Asset Bundle
 

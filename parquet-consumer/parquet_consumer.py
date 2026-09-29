@@ -4,8 +4,13 @@ This consumer uses its own consumer group (`parquet-writer`), separate from
 the ELK consumer (`elk-writer`). Kafka tracks offsets per group, so both
 groups receive every message in the topic, independently of each other.
 
-Messages are buffered and written as one Parquet file per partition of the
-output, using Hive-style partitioning by date:
+Messages are protobuf. They are decoded with the class named in each
+message's `message-type` header, and converted to Arrow with protarrow, which
+derives the Parquet schema from the protobuf descriptor (see
+schema/telemetry_schema/parquet.py). After changing the .proto file and
+regenerating the code, new files get the new columns without changes here.
+
+Files use Hive-style partitioning by the date of the message's timestamp:
 
     <OUTPUT_DIR>/event_date=2026-09-29/part-20260929T101500-3f2a.parquet
 
@@ -24,18 +29,32 @@ Configuration (environment variables):
     OUTPUT_DIR               default: ./data/parquet/vehicle_telemetry
     FLUSH_MAX_MESSAGES       default: 5000
     FLUSH_INTERVAL_SECONDS   default: 60
+    MESSAGE_TYPE             default: vehicle.v1.VehicleTelemetry (used when a
+                             message has no message-type header)
+    PARTITION_FIELD          default: timestamp (a google.protobuf.Timestamp
+                             field; its date becomes the event_date folder)
+
+Before running this outside Docker, generate the protobuf code:
+
+    python schema/generate.py
 """
 
-import json
 import os
 import signal
+import sys
 import time
 import uuid
-from datetime import datetime, timezone
+from collections import defaultdict
+from datetime import date, datetime, timezone
+from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 from confluent_kafka import Consumer, KafkaError
+from google.protobuf.message import DecodeError
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "schema"))
+from telemetry_schema import message_class, parquet  # noqa: E402
 
 BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9094")
 TOPIC = os.getenv("KAFKA_TOPIC", "vehicle-telemetry")
@@ -43,62 +62,50 @@ GROUP_ID = os.getenv("KAFKA_GROUP_ID", "parquet-writer")
 OUTPUT_DIR = os.getenv("OUTPUT_DIR", "./data/parquet/vehicle_telemetry")
 FLUSH_MAX_MESSAGES = int(os.getenv("FLUSH_MAX_MESSAGES", "5000"))
 FLUSH_INTERVAL_SECONDS = float(os.getenv("FLUSH_INTERVAL_SECONDS", "60"))
-
-# An explicit schema keeps the files consistent (a column is never inferred
-# as null just because a batch happened to have no values for it), and turns
-# the ISO timestamp string into a real timestamp column.
-TIRES = ["front_left", "front_right", "rear_left", "rear_right"]
-SCHEMA = pa.schema(
-    [
-        ("message_id", pa.string()),
-        ("vehicle_id", pa.string()),
-        ("vin", pa.string()),
-        ("vehicle_type", pa.string()),
-        ("timestamp", pa.timestamp("ms", tz="UTC")),
-        ("position", pa.struct([("lat", pa.float64()), ("lon", pa.float64())])),
-        ("heading_deg", pa.float64()),
-        ("speed_kmh", pa.float64()),
-        ("rpm", pa.int32()),
-        ("gear", pa.int32()),
-        ("engine_temp_c", pa.float64()),
-        ("fuel_level_pct", pa.float64()),
-        ("battery_voltage", pa.float64()),
-        ("odometer_km", pa.float64()),
-        ("tire_pressure_kpa", pa.struct([(t, pa.float64()) for t in TIRES])),
-        ("check_engine_light", pa.bool_()),
-        ("dtc_codes", pa.list_(pa.string())),
-        ("events", pa.list_(pa.string())),
-        ("kafka_partition", pa.int32()),
-        ("kafka_offset", pa.int64()),
-        ("ingested_at", pa.timestamp("ms", tz="UTC")),
-    ]
-)
+MESSAGE_TYPE = os.getenv("MESSAGE_TYPE", "vehicle.v1.VehicleTelemetry")
+PARTITION_FIELD = os.getenv("PARTITION_FIELD", "timestamp")
 
 
-def to_row(msg) -> dict:
-    record = json.loads(msg.value())
-    record["timestamp"] = datetime.fromisoformat(record["timestamp"])
-    record["kafka_partition"] = msg.partition()
-    record["kafka_offset"] = msg.offset()
-    record["ingested_at"] = datetime.now(timezone.utc)
-    return record
+class Buffer:
+    """Decoded messages waiting to be written, plus where they came from in Kafka."""
+
+    def __init__(self):
+        self.messages = []
+        self.partitions = []
+        self.offsets = []
+        self.ingested_at = []
+
+    def __len__(self):
+        return len(self.messages)
+
+    def add(self, message, kafka_msg) -> None:
+        self.messages.append(message)
+        self.partitions.append(kafka_msg.partition())
+        self.offsets.append(kafka_msg.offset())
+        self.ingested_at.append(datetime.now(timezone.utc))
+
+    def to_table(self, message_type: type) -> pa.Table:
+        table = parquet.to_table(self.messages, message_type)
+        # Columns that aren't part of the protobuf message.
+        table = table.append_column("kafka_partition", pa.array(self.partitions, pa.int32()))
+        table = table.append_column("kafka_offset", pa.array(self.offsets, pa.int64()))
+        return table.append_column("ingested_at", pa.array(self.ingested_at, pa.timestamp("us", tz="UTC")))
 
 
-def write_files(rows: list[dict]) -> None:
-    """Write the rows as one Parquet file per event date."""
-    by_date: dict[str, list[dict]] = {}
-    for row in rows:
-        by_date.setdefault(row["timestamp"].date().isoformat(), []).append(row)
+def event_date(message) -> date:
+    if PARTITION_FIELD in message.DESCRIPTOR.fields_by_name and message.HasField(PARTITION_FIELD):
+        return getattr(message, PARTITION_FIELD).ToDatetime(tzinfo=timezone.utc).date()
+    return datetime.now(timezone.utc).date()
 
-    for event_date, date_rows in by_date.items():
-        directory = os.path.join(OUTPUT_DIR, f"event_date={event_date}")
-        os.makedirs(directory, exist_ok=True)
-        name = f"part-{datetime.now(timezone.utc):%Y%m%dT%H%M%S}-{uuid.uuid4().hex[:8]}.parquet"
-        path = os.path.join(directory, name)
-        table = pa.Table.from_pylist(date_rows, schema=SCHEMA)
-        pq.write_table(table, path + ".tmp", compression="zstd")
-        os.rename(path + ".tmp", path)
-        print(f"Wrote {len(date_rows)} rows to {path}")
+
+def write_file(buffer: Buffer, message_type: type, day: date) -> None:
+    directory = os.path.join(OUTPUT_DIR, f"event_date={day.isoformat()}")
+    os.makedirs(directory, exist_ok=True)
+    name = f"part-{datetime.now(timezone.utc):%Y%m%dT%H%M%S}-{uuid.uuid4().hex[:8]}.parquet"
+    path = os.path.join(directory, name)
+    pq.write_table(buffer.to_table(message_type), path + ".tmp", compression="zstd")
+    os.rename(path + ".tmp", path)
+    print(f"Wrote {len(buffer)} {message_type.DESCRIPTOR.name} messages to {path}")
 
 
 def main() -> None:
@@ -122,17 +129,19 @@ def main() -> None:
     signal.signal(signal.SIGTERM, stop)
 
     print(f"Consuming '{TOPIC}' from {BOOTSTRAP_SERVERS} as group '{GROUP_ID}', writing Parquet to {OUTPUT_DIR}")
-    buffer: list[dict] = []
+    # One buffer per (message type, event date): each becomes one file.
+    buffers: dict[tuple[type, date], Buffer] = defaultdict(Buffer)
     last_flush = time.monotonic()
 
     def flush() -> None:
-        nonlocal buffer, last_flush
-        if buffer:
-            write_files(buffer)
+        nonlocal last_flush
+        if buffers:
+            for (message_type, day), buffer in buffers.items():
+                write_file(buffer, message_type, day)
+            buffers.clear()
             # The files are on disk: now it is safe to tell Kafka we are done
             # with these messages.
             consumer.commit(asynchronous=False)
-        buffer = []
         last_flush = time.monotonic()
 
     try:
@@ -143,11 +152,16 @@ def main() -> None:
                         print(f"Kafka error: {msg.error()}")
                     continue
                 try:
-                    buffer.append(to_row(msg))
-                except (ValueError, KeyError) as e:
-                    print(f"Skipping bad message at partition {msg.partition()} offset {msg.offset()}: {e}")
+                    headers = dict(msg.headers() or [])
+                    message_type = message_class(headers.get("message-type", MESSAGE_TYPE.encode()).decode())
+                    message = message_type.FromString(msg.value())
+                except (DecodeError, KeyError) as e:
+                    print(f"Skipping undecodable message at partition {msg.partition()} offset {msg.offset()}: {e!r}")
+                    continue
+                buffers[(message_type, event_date(message))].add(message, msg)
 
-            if len(buffer) >= FLUSH_MAX_MESSAGES or time.monotonic() - last_flush >= FLUSH_INTERVAL_SECONDS:
+            buffered = sum(len(b) for b in buffers.values())
+            if buffered >= FLUSH_MAX_MESSAGES or time.monotonic() - last_flush >= FLUSH_INTERVAL_SECONDS:
                 flush()
         flush()
     finally:

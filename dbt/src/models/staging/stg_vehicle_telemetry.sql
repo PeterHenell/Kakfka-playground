@@ -2,6 +2,10 @@
 --
 -- The consumers deliver messages at-least-once, so the same message can end
 -- up in the Parquet files more than once. We keep one row per message_id.
+--
+-- Protobuf enums arrive as their names (CAR, HARSH_BRAKING); they are
+-- lower-cased here. New fields added to the .proto file show up in the raw
+-- Parquet files automatically; add them below to use them in the models.
 
 with source as (
 
@@ -15,7 +19,7 @@ deduplicated as (
         message_id,
         vehicle_id,
         vin,
-        vehicle_type,
+        lower(vehicle_type) as vehicle_type,
         {{ adapter.quote('timestamp') }} as recorded_at,
         cast(event_date as date) as event_date,
 
@@ -37,7 +41,7 @@ deduplicated as (
 
         check_engine_light,
         dtc_codes,
-        events,
+        transform(events, e -> lower(e)) as events,
 
         kafka_partition,
         kafka_offset,

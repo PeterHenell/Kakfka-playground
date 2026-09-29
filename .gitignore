@@ -1,6 +1,10 @@
 __pycache__/
 *.pyc
-.venv/
+.venv*/
 venv/
-# Parquet files and the DuckDB database written by the playground
+# Parquet files and Spark tables written by the playground
 data/
+# Recreated by schema/generate.py
+schema/generated/
+# Spark's embedded metastore log
+derby.log

@@ -1,7 +1,14 @@
 """Reads vehicle telemetry from Kafka and ships it to the ELK stack.
 
-Messages are read in batches and POSTed to Logstash's HTTP input, which
-indexes them into Elasticsearch (and from there you explore them in Kibana).
+Messages are read in batches, decoded from protobuf, converted to JSON
+documents and POSTed to Logstash's HTTP input, which indexes them into
+Elasticsearch (and from there you explore them in Kibana).
+
+The consumer doesn't know about any specific field. It looks up the protobuf
+class from the `message-type` header of each message (see
+schema/telemetry_schema), and converts it with protobuf's json_format. After
+changing the .proto file and regenerating the code, new fields show up in
+Elasticsearch without changes here.
 
 Offsets are committed manually, and only after Logstash has accepted the
 batch. If the consumer crashes before committing, the batch is read again
@@ -15,21 +22,40 @@ Configuration (environment variables):
     KAFKA_GROUP_ID           default: elk-writer
     LOGSTASH_URL             default: http://localhost:8081
     BATCH_SIZE               default: 100
+    MESSAGE_TYPE             default: vehicle.v1.VehicleTelemetry (used when a
+                             message has no message-type header)
+
+Before running this outside Docker, generate the protobuf code:
+
+    python schema/generate.py
 """
 
-import json
 import os
 import signal
+import sys
 import time
+from pathlib import Path
 
 import requests
 from confluent_kafka import Consumer, KafkaError
+from google.protobuf.message import DecodeError
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "schema"))
+from telemetry_schema import elk, message_class  # noqa: E402
 
 BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9094")
 TOPIC = os.getenv("KAFKA_TOPIC", "vehicle-telemetry")
 GROUP_ID = os.getenv("KAFKA_GROUP_ID", "elk-writer")
 LOGSTASH_URL = os.getenv("LOGSTASH_URL", "http://localhost:8081")
 BATCH_SIZE = int(os.getenv("BATCH_SIZE", "100"))
+MESSAGE_TYPE = os.getenv("MESSAGE_TYPE", "vehicle.v1.VehicleTelemetry")
+
+
+def decode(msg):
+    """Decodes a Kafka message into a protobuf message of the type named in its header."""
+    headers = dict(msg.headers() or [])
+    type_name = headers.get("message-type", MESSAGE_TYPE.encode()).decode()
+    return message_class(type_name).FromString(msg.value())
 
 
 def on_assign(consumer, partitions):
@@ -94,9 +120,9 @@ def main() -> None:
                         print(f"Kafka error: {msg.error()}")
                     continue
                 try:
-                    document = json.loads(msg.value())
-                except json.JSONDecodeError:
-                    print(f"Skipping invalid JSON at partition {msg.partition()} offset {msg.offset()}")
+                    document = elk.to_document(decode(msg))
+                except (DecodeError, KeyError) as e:
+                    print(f"Skipping undecodable message at partition {msg.partition()} offset {msg.offset()}: {e!r}")
                     continue
                 # Keep track of where in Kafka the document came from.
                 document["kafka"] = {"topic": msg.topic(), "partition": msg.partition(), "offset": msg.offset()}

@@ -1,0 +1,12 @@
+# Kafka UI (kafbat) configuration. Decodes the protobuf messages using the
+# .proto files in schema/proto, so you can read them in the UI.
+kafka:
+  clusters:
+    - name: playground
+      bootstrapServers: kafka:9092
+      defaultValueSerde: ProtobufFile
+      serde:
+        - name: ProtobufFile
+          properties:
+            protobufFilesDir: /protofiles
+            protobufMessageName: vehicle.v1.VehicleTelemetry

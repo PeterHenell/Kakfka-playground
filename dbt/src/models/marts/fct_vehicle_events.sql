@@ -12,7 +12,7 @@ with exploded as (
         longitude,
         speed_kmh,
         engine_temp_c,
-        {{ explode('events') }} as event_type
+        explode(events) as event_type
 
     from {{ ref('stg_vehicle_telemetry') }}
 

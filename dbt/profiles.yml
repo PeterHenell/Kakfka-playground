@@ -1,12 +1,28 @@
-# Profile for local development: dbt runs on DuckDB, an in-process database
-# stored in a single file. dbt looks for profiles.yml in the current
-# directory first, so running dbt from this folder picks this file up.
+# Profile for local development: dbt runs on Apache Spark, inside the dbt
+# process itself (method: session, i.e. PySpark; needs Java). dbt looks for
+# profiles.yml in the current directory first, so running dbt from this
+# folder picks this file up.
+#
+# Tables are stored as Parquet files under SPARK_DATA_DIR/warehouse, and the
+# table catalog (Hive metastore) in SPARK_DATA_DIR/metastore_db.
 #
 # The Databricks job uses dbt_profiles/profiles.yml instead.
 vehicle_telemetry:
   target: dev
   outputs:
     dev:
-      type: duckdb
-      path: "{{ env_var('DUCKDB_PATH', '../data/vehicle_telemetry.duckdb') }}"
-      threads: 4
+      type: spark
+      method: session
+      host: localhost  # required by dbt-spark, not used in session mode
+      schema: vehicle_telemetry
+      threads: 1
+      server_side_parameters:
+        spark.master: "local[*]"
+        spark.driver.memory: 1g
+        spark.sql.warehouse.dir: "{{ env_var('SPARK_DATA_DIR', '../data/spark') }}/warehouse"
+        spark.hadoop.javax.jdo.option.ConnectionURL: "jdbc:derby:;databaseName={{ env_var('SPARK_DATA_DIR', '../data/spark') }}/metastore_db;create=true"
+        # Parquet files written before and after a schema change have
+        # different columns. Merge them instead of using one file's schema.
+        spark.sql.parquet.mergeSchema: "true"
+        spark.sql.session.timeZone: UTC
+        spark.ui.enabled: "false"

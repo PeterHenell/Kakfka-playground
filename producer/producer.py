@@ -3,9 +3,18 @@
 Each vehicle drives around (roughly) Stockholm, and every tick it sends one
 message with its position, speed, engine temperature and so on.
 
+Messages are serialized with Protocol Buffers, using the VehicleTelemetry
+message defined in schema/proto/vehicle/v1/vehicle_telemetry.proto. Each
+message carries a `message-type` header with the protobuf type name, so
+consumers know how to decode it.
+
 Messages are keyed by vehicle_id. Kafka hashes the key to pick a partition, so
 all messages from the same vehicle land in the same partition and are read in
 the order they were produced.
+
+Before running this outside Docker, generate the protobuf code:
+
+    python schema/generate.py
 
 Configuration (environment variables):
     KAFKA_BOOTSTRAP_SERVERS  default: localhost:9094
@@ -15,17 +24,23 @@ Configuration (environment variables):
     INTERVAL_SECONDS         default: 1.0 (time between ticks)
 """
 
-import json
 import math
 import os
 import random
 import signal
+import sys
 import time
 import uuid
-from datetime import datetime, timezone
+from pathlib import Path
 
 from confluent_kafka import KafkaException, Producer
 from confluent_kafka.admin import AdminClient, NewTopic
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "schema"))
+from telemetry_schema.registry import load_generated_modules  # noqa: E402
+
+load_generated_modules()
+from vehicle.v1 import vehicle_telemetry_pb2 as pb  # noqa: E402
 
 BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9094")
 TOPIC = os.getenv("KAFKA_TOPIC", "vehicle-telemetry")
@@ -35,7 +50,7 @@ INTERVAL_SECONDS = float(os.getenv("INTERVAL_SECONDS", "1.0"))
 
 # Vehicles start somewhere around central Stockholm.
 START_LAT, START_LON = 59.3293, 18.0686
-VEHICLE_TYPES = ["car", "van", "truck", "bus"]
+VEHICLE_TYPES = [pb.CAR, pb.VAN, pb.TRUCK, pb.BUS]
 EARTH_RADIUS_M = 6_371_000
 
 
@@ -50,7 +65,7 @@ class Vehicle:
         fixed = random.Random(index)
         self.vin = "".join(fixed.choices("ABCDEFGHJKLMNPRSTUVWXYZ0123456789", k=17))
         self.vehicle_type = fixed.choice(VEHICLE_TYPES)
-        self.max_speed = 90 if self.vehicle_type in ("truck", "bus") else 130
+        self.max_speed = 90 if self.vehicle_type in (pb.TRUCK, pb.BUS) else 130
 
         self.lat = START_LAT + random.uniform(-0.05, 0.05)
         self.lon = START_LON + random.uniform(-0.08, 0.08)
@@ -67,7 +82,7 @@ class Vehicle:
         self.leaking_tire = fixed.choice([None, None, None, "rear_left"])
         self.cooling_problem = fixed.random() < 0.2
 
-    def tick(self, dt: float) -> dict:
+    def tick(self, dt: float) -> pb.VehicleTelemetry:
         events = []
 
         # --- speed: drift towards a target speed, sometimes pick a new one ---
@@ -78,11 +93,11 @@ class Vehicle:
         self.speed = max(0.0, min(self.speed, self.max_speed))
         acceleration = (self.speed - previous_speed) / 3.6 / dt  # m/s^2
         if acceleration < -4:
-            events.append("harsh_braking")
+            events.append(pb.HARSH_BRAKING)
         elif acceleration > 3.5:
-            events.append("harsh_acceleration")
+            events.append(pb.HARSH_ACCELERATION)
         if self.speed > 110:
-            events.append("speeding")
+            events.append(pb.SPEEDING)
 
         # --- position: move along the heading ---
         self.heading = (self.heading + random.gauss(0, 8)) % 360
@@ -102,22 +117,22 @@ class Vehicle:
         operating_temp = 110 if self.cooling_problem else 90
         self.engine_temp += (operating_temp - self.engine_temp) * 0.02 + rpm / 10_000 + random.gauss(0, 0.3)
         if self.engine_temp > 105:
-            events.append("engine_overheating")
+            events.append(pb.ENGINE_OVERHEATING)
 
         # --- consumables ---
         self.fuel_level = max(0.0, self.fuel_level - (0.0005 + rpm / 5_000_000) * dt * 10)
         if self.fuel_level < 10:
-            events.append("low_fuel")
+            events.append(pb.LOW_FUEL)
         if self.fuel_level == 0 or random.random() < 0.0005:
             self.fuel_level = random.uniform(80, 100)  # visited a gas station
-            events.append("refueled")
+            events.append(pb.REFUELED)
         self.battery_voltage = (14.2 if rpm > 1000 else 13.6) + random.gauss(0, 0.1)
         for tire in self.tire_pressure:
             self.tire_pressure[tire] += random.gauss(0, 0.2)
         if self.leaking_tire:
             self.tire_pressure[self.leaking_tire] -= 0.05 * dt
             if self.tire_pressure[self.leaking_tire] < 180:
-                events.append("low_tire_pressure")
+                events.append(pb.LOW_TIRE_PRESSURE)
 
         dtc_codes = []
         if self.engine_temp > 105:
@@ -125,27 +140,27 @@ class Vehicle:
         if self.leaking_tire and self.tire_pressure[self.leaking_tire] < 180:
             dtc_codes.append("C0750")  # tire pressure sensor low
 
-        return {
-            "message_id": str(uuid.uuid4()),
-            "vehicle_id": self.vehicle_id,
-            "vin": self.vin,
-            "vehicle_type": self.vehicle_type,
-            "timestamp": datetime.now(timezone.utc).isoformat(timespec="milliseconds"),
-            # {lat, lon} is one of the formats Elasticsearch accepts for geo_point.
-            "position": {"lat": round(self.lat, 6), "lon": round(self.lon, 6)},
-            "heading_deg": round(self.heading, 1),
-            "speed_kmh": round(self.speed, 1),
-            "rpm": round(rpm),
-            "gear": gear,
-            "engine_temp_c": round(self.engine_temp, 1),
-            "fuel_level_pct": round(self.fuel_level, 2),
-            "battery_voltage": round(self.battery_voltage, 2),
-            "odometer_km": round(self.odometer, 3),
-            "tire_pressure_kpa": {t: round(p, 1) for t, p in self.tire_pressure.items()},
-            "check_engine_light": bool(dtc_codes),
-            "dtc_codes": dtc_codes,
-            "events": events,
-        }
+        message = pb.VehicleTelemetry(
+            message_id=str(uuid.uuid4()),
+            vehicle_id=self.vehicle_id,
+            vin=self.vin,
+            vehicle_type=self.vehicle_type,
+            position=pb.Position(lat=round(self.lat, 6), lon=round(self.lon, 6)),
+            heading_deg=round(self.heading, 1),
+            speed_kmh=round(self.speed, 1),
+            rpm=round(rpm),
+            gear=gear,
+            engine_temp_c=round(self.engine_temp, 1),
+            fuel_level_pct=round(self.fuel_level, 2),
+            battery_voltage=round(self.battery_voltage, 2),
+            odometer_km=round(self.odometer, 3),
+            tire_pressure_kpa=pb.TirePressure(**{t: round(p, 1) for t, p in self.tire_pressure.items()}),
+            check_engine_light=bool(dtc_codes),
+            dtc_codes=dtc_codes,
+            events=events,
+        )
+        message.timestamp.GetCurrentTime()
+        return message
 
 
 def ensure_topic(admin: AdminClient) -> None:
@@ -199,7 +214,9 @@ def main() -> None:
             producer.produce(
                 TOPIC,
                 key=vehicle.vehicle_id,
-                value=json.dumps(message),
+                value=message.SerializeToString(),
+                # Tells consumers which protobuf message type the bytes are.
+                headers={"message-type": message.DESCRIPTOR.full_name},
                 on_delivery=delivery_report,
             )
             sent += 1

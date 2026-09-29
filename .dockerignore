@@ -1,0 +1,10 @@
+# Build contexts are the repository root; keep them small.
+data/
+.git/
+**/__pycache__/
+schema/generated/
+dbt/target/
+dbt/logs/
+dbt/dbt_packages/
+.venv/
+venv/
