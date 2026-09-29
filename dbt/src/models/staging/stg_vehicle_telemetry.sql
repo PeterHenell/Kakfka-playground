@@ -1,11 +1,14 @@
 -- One row per telemetry reading, with nested fields flattened into columns.
 --
+-- telemetry_source() decodes the binary protobuf files written by the
+-- protobuf consumer (see macros/telemetry_source.sql).
+--
 -- The consumers deliver messages at-least-once, so the same message can end
--- up in the Parquet files more than once. We keep one row per message_id.
+-- up in the files more than once. We keep one row per message_id.
 --
 -- Protobuf enums arrive as their names (CAR, HARSH_BRAKING); they are
--- lower-cased here. New fields added to the .proto file show up in the raw
--- Parquet files automatically; add them below to use them in the models.
+-- lower-cased here. New fields added to the .proto file are available in
+-- telemetry_source() automatically; add them below to use them in the models.
 
 with source as (
 
@@ -21,7 +24,7 @@ deduplicated as (
         vin,
         lower(vehicle_type) as vehicle_type,
         {{ adapter.quote('timestamp') }} as recorded_at,
-        cast(event_date as date) as event_date,
+        to_date({{ adapter.quote('timestamp') }}) as event_date,
 
         source.position.lat as latitude,
         source.position.lon as longitude,

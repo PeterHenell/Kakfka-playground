@@ -7,11 +7,11 @@
 import sys
 from pathlib import Path
 
-import protarrow
-import pyarrow as pa
+from google.protobuf import descriptor_pb2
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from telemetry_schema import elk, message_class, parquet  # noqa: E402
+from telemetry_schema import elk, message_class  # noqa: E402
+from telemetry_schema.registry import DESCRIPTOR_SET  # noqa: E402
 
 VehicleTelemetry = message_class("vehicle.v1.VehicleTelemetry")
 
@@ -52,9 +52,17 @@ def test_elk_mapping_follows_types_and_custom_option():
     assert set(properties) == {f.name for f in VehicleTelemetry.DESCRIPTOR.fields}
 
 
-def test_parquet_table_has_expected_types_and_round_trips():
-    table = parquet.to_table([sample()], VehicleTelemetry)
-    assert table.schema.field("timestamp").type == pa.timestamp("us", tz="UTC")
-    assert table.schema.field("vehicle_type").type == pa.string()
-    assert table.column("events").to_pylist() == [["HARSH_BRAKING", "SPEEDING"]]
-    assert protarrow.table_to_messages(table, VehicleTelemetry) == [sample()]
+def test_record_batch_round_trips_message_bytes():
+    KafkaRecordBatch = message_class("kafka.v1.KafkaRecordBatch")
+    batch = KafkaRecordBatch()
+    batch.records.add(offset=7, message_type="vehicle.v1.VehicleTelemetry", value=sample().SerializeToString())
+    decoded = KafkaRecordBatch.FromString(batch.SerializeToString())
+    assert VehicleTelemetry.FromString(decoded.records[0].value) == sample()
+
+
+def test_descriptor_set_contains_all_messages_and_imports():
+    descriptor_set = descriptor_pb2.FileDescriptorSet.FromString(DESCRIPTOR_SET.read_bytes())
+    files = {f.name for f in descriptor_set.file}
+    assert {"vehicle/v1/vehicle_telemetry.proto", "kafka/v1/kafka_record.proto"} <= files
+    # Imports are included, so Spark can resolve google.protobuf.Timestamp.
+    assert "google/protobuf/timestamp.proto" in files

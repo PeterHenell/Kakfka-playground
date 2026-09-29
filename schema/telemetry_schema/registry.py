@@ -14,6 +14,8 @@ from pathlib import Path
 from google.protobuf import descriptor_pool, message_factory
 
 GENERATED_DIR = Path(__file__).resolve().parent.parent / "generated"
+# The compiled schema of all .proto files (a protobuf FileDescriptorSet).
+DESCRIPTOR_SET = GENERATED_DIR / "descriptors" / "descriptor_set.desc"
 
 
 @cache

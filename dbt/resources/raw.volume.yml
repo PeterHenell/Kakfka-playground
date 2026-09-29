@@ -1,4 +1,4 @@
-# The volume the parquet consumer's files are uploaded to.
+# The volume the protobuf consumer's files are uploaded to.
 resources:
   volumes:
     raw:
@@ -6,4 +6,4 @@ resources:
       schema_name: ${resources.schemas.vehicle_telemetry.name}
       name: raw
       volume_type: MANAGED
-      comment: Parquet files written by the parquet consumer
+      comment: Binary protobuf files written by the protobuf consumer

@@ -1,35 +1,43 @@
 # vehicle_telemetry dbt project
 
-Turns the Parquet files written by the parquet consumer into tables that are
-easy to analyse. The same project runs in two places:
+Decodes the binary protobuf files written by the protobuf consumer and turns
+them into tables that are easy to analyse. The same project runs in two places:
 
 - **Locally on Apache Spark**: dbt starts Spark inside its own process
   (dbt-spark's `session` method, i.e. PySpark). Tables are stored as Parquet
   files in `../data/spark/warehouse`, and the table catalog in
   `../data/spark/metastore_db`.
 - **On Databricks**: deployed as a Databricks Asset Bundle (DAB), running on
-  a SQL warehouse and reading the Parquet files from a Unity Catalog Volume.
+  a SQL warehouse and reading the protobuf files from a Unity Catalog Volume.
 
 Both are Spark SQL, so the models are the same SQL in both places.
 
 ## Models
 
 ```
-Parquet files ──> stg_vehicle_telemetry ──┬──> dim_vehicles           one row per vehicle
-(event_date=…/     (view: flattened,      ├──> fct_vehicle_daily      distance and health per vehicle and day
- part-….parquet)    de-duplicated)        ├──> fct_vehicle_events     one row per event (harsh_braking, …)
-                                          └──> vehicle_latest_status  latest reading per vehicle
+protobuf files ──> stg_vehicle_telemetry ──┬──> dim_vehicles           one row per vehicle
+(date=…/            (view: decoded,        ├──> fct_vehicle_daily      distance and health per vehicle and day
+ part-….pb)          flattened, de-dup.)   ├──> fct_vehicle_events     one row per event (harsh_braking, …)
+                                           └──> vehicle_latest_status  latest reading per vehicle
 ```
 
 - `stg_vehicle_telemetry` removes duplicates. Both consumers deliver
-  *at-least-once*, so a message can show up in more than one Parquet file.
+  *at-least-once*, so a message can show up in more than one file.
   It also computes the distance driven since each vehicle's previous reading,
   and lower-cases the protobuf enum names (`HARSH_BRAKING` → `harsh_braking`).
-- The raw files are read through the `telemetry_source()` macro. It is
-  *dispatched*: dbt picks the Spark or the Databricks implementation
-  depending on the adapter. Both merge the schemas of the Parquet files, so
-  files written before and after a change to the `.proto` file can be read
-  together. Columns missing from older files are `null`.
+- The raw files are read and decoded by the `telemetry_source()` macro, with
+  Spark's `from_protobuf`: first each file into a `KafkaRecordBatch`, then
+  each record's bytes into the message type in the `message_type` var. It
+  decodes with the descriptor set that the consumer writes to
+  `_schema/descriptor_set.desc`, which always describes the newest schema.
+  Protobuf can decode older messages with a newer schema; fields that didn't
+  exist yet get their default value.
+- `from_protobuf` is part of the spark-protobuf module, which PySpark doesn't
+  include. Spark downloads it from Maven Central on the first run (see
+  `spark.jars.packages` in `profiles.yml`). Databricks has it built in.
+- Reading the files is the only part that differs between local Spark and
+  Databricks, so that macro (`raw_protobuf_files()`) is *dispatched*: dbt
+  picks the Spark or the Databricks implementation depending on the adapter.
 - The staging model lists the columns it uses. When you add a field to the
   `.proto` file, it is available in `telemetry_source()` right away; add it
   to the staging model to use it downstream.
@@ -46,7 +54,7 @@ docker compose run --rm dbt show --select fct_vehicle_daily     # preview a mode
 docker compose run --rm dbt show --inline "select * from {{ ref('fct_vehicle_events') }} where event_type = 'engine_overheating'"
 ```
 
-The parquet consumer writes a file every 60 seconds, so give it a minute
+The protobuf consumer writes a file every 60 seconds, so give it a minute
 after starting the stack before the first build. Run `build` again to pick up
 new data. Starting Spark takes a few seconds, so a build takes about half a
 minute.
@@ -83,7 +91,7 @@ Files involved:
 |------------------------------------------|-------------------------------------------------------------------------------|
 | `databricks.yml`                         | The bundle: variables (catalog, schema, warehouse) and `dev`/`prod` targets   |
 | `resources/vehicle_telemetry.schema.yml` | Creates the Unity Catalog schema                                              |
-| `resources/raw.volume.yml`               | Creates the `raw` volume that holds the Parquet files                         |
+| `resources/raw.volume.yml`               | Creates the `raw` volume that holds the protobuf files                        |
 | `resources/vehicle_telemetry.job.yml`    | A job with a dbt task that runs `dbt build` on serverless compute every hour  |
 | `dbt_profiles/profiles.yml`              | The dbt profile the job uses; Databricks provides the host and token          |
 
@@ -107,9 +115,10 @@ a workspace with Unity Catalog, and a SQL warehouse.
    databricks bundle deploy
    ```
 
-4. **Upload the Parquet files** from the playground to the volume:
+4. **Upload the protobuf files** (including the `_schema` folder) from the
+   playground to the volume:
    ```bash
-   databricks fs cp -r --overwrite ../data/parquet/vehicle_telemetry \
+   databricks fs cp -r --overwrite ../data/protobuf/vehicle_telemetry \
      dbfs:/Volumes/main/dev_<your_user_name>_vehicle_telemetry/raw/vehicle_telemetry
    ```
 
