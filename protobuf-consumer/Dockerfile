@@ -3,12 +3,12 @@
 FROM python:3.12-slim
 WORKDIR /app
 COPY schema/requirements.txt schema/requirements.txt
-COPY parquet-consumer/requirements.txt parquet-consumer/requirements.txt
-RUN pip install --no-cache-dir -r schema/requirements.txt -r parquet-consumer/requirements.txt
+COPY protobuf-consumer/requirements.txt protobuf-consumer/requirements.txt
+RUN pip install --no-cache-dir -r schema/requirements.txt -r protobuf-consumer/requirements.txt
 # Generate the protobuf code and mappings from the .proto files. Rebuilding
 # the image (docker compose up -d --build) picks up schema changes.
 COPY schema/ schema/
 RUN python schema/generate.py
-COPY parquet-consumer/parquet_consumer.py parquet-consumer/parquet_consumer.py
+COPY protobuf-consumer/protobuf_consumer.py protobuf-consumer/protobuf_consumer.py
 # -u: unbuffered output so prints show up in `docker compose logs` immediately
-CMD ["python", "-u", "parquet-consumer/parquet_consumer.py"]
+CMD ["python", "-u", "protobuf-consumer/protobuf_consumer.py"]

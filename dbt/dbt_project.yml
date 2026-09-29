@@ -18,10 +18,14 @@ clean-targets:
   - dbt_packages
 
 vars:
-  # Where the parquet consumer writes its files. Locally this is the ./data
+  # Where the protobuf consumer writes its files. Locally this is the ./data
   # folder in the repo; the Databricks job overrides it with a Unity Catalog
   # Volume path (see resources/vehicle_telemetry.job.yml).
-  parquet_path: "{{ env_var('PARQUET_PATH', '../data/parquet/vehicle_telemetry') }}"
+  raw_path: "{{ env_var('RAW_DATA_PATH', '../data/protobuf/vehicle_telemetry') }}"
+  # The compiled schema the consumer writes next to the files.
+  descriptor_path: "{{ env_var('RAW_DATA_PATH', '../data/protobuf/vehicle_telemetry') }}/_schema/descriptor_set.desc"
+  # The protobuf message type to decode.
+  message_type: vehicle.v1.VehicleTelemetry
 
 models:
   vehicle_telemetry:

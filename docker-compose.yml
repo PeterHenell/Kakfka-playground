@@ -1,7 +1,7 @@
 # Kafka learning playground
 #
 #   producer (python) --> Kafka --+--> consumer (python) ---------> Logstash --> Elasticsearch --> Kibana
-#                                 +--> parquet-consumer (python) --> ./data/parquet --> dbt + Spark
+#                                 +--> protobuf-consumer (python) --> ./data/protobuf --> dbt + Spark
 #
 # Messages are protobuf, defined in schema/proto. The Python images generate
 # their protobuf code while being built, so after changing a .proto file run:
@@ -172,18 +172,18 @@ services:
         condition: service_completed_successfully
     restart: unless-stopped
 
-  # Second consumer group: writes the same stream to Parquet files in
-  # ./data/parquet, for the dbt project to process.
-  parquet-consumer:
+  # Second consumer group: archives the same stream as binary protobuf files
+  # in ./data/protobuf, for the dbt project (Spark) to decode and process.
+  protobuf-consumer:
     build:
       context: .
-      dockerfile: parquet-consumer/Dockerfile
-    container_name: parquet-consumer
+      dockerfile: protobuf-consumer/Dockerfile
+    container_name: protobuf-consumer
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       KAFKA_TOPIC: vehicle-telemetry
-      KAFKA_GROUP_ID: parquet-writer
-      OUTPUT_DIR: /data/parquet/vehicle_telemetry
+      KAFKA_GROUP_ID: protobuf-writer
+      OUTPUT_DIR: /data/protobuf/vehicle_telemetry
       FLUSH_MAX_MESSAGES: 5000
       FLUSH_INTERVAL_SECONDS: 60
     volumes:
@@ -203,8 +203,10 @@ services:
     profiles: ["dbt"]
     working_dir: /dbt
     environment:
-      PARQUET_PATH: /data/parquet/vehicle_telemetry
+      RAW_DATA_PATH: /data/protobuf/vehicle_telemetry
       SPARK_DATA_DIR: /data/spark
+      # Cache for the spark-protobuf jar, so it is only downloaded once.
+      SPARK_IVY_DIR: /data/spark/ivy
     volumes:
       - ./dbt:/dbt
       - ./data:/data
@@ -219,6 +221,10 @@ services:
     working_dir: /data/spark
     entrypoint:
       - spark-sql
+      - --packages
+      - org.apache.spark:spark-protobuf_2.13:4.2.0
+      - --conf
+      - spark.jars.ivy=/data/spark/ivy
       - --conf
       - spark.sql.warehouse.dir=/data/spark/warehouse
       - --conf

@@ -23,7 +23,8 @@ resources:
                 "catalog": "${var.catalog}",
                 "schema": "${resources.schemas.vehicle_telemetry.name}",
                 "http_path": "/sql/1.0/warehouses/${var.warehouse_id}",
-                "parquet_path": "/Volumes/${var.catalog}/${resources.schemas.vehicle_telemetry.name}/${resources.volumes.raw.name}/vehicle_telemetry"
+                "raw_path": "/Volumes/${var.catalog}/${resources.schemas.vehicle_telemetry.name}/${resources.volumes.raw.name}/vehicle_telemetry",
+                "descriptor_path": "/Volumes/${var.catalog}/${resources.schemas.vehicle_telemetry.name}/${resources.volumes.raw.name}/vehicle_telemetry/_schema/descriptor_set.desc"
                 }'
 
       environments:

@@ -6,6 +6,8 @@
 # Tables are stored as Parquet files under SPARK_DATA_DIR/warehouse, and the
 # table catalog (Hive metastore) in SPARK_DATA_DIR/metastore_db.
 #
+# The spark-protobuf version must match the PySpark version in requirements.txt.
+#
 # The Databricks job uses dbt_profiles/profiles.yml instead.
 vehicle_telemetry:
   target: dev
@@ -21,8 +23,10 @@ vehicle_telemetry:
         spark.driver.memory: 1g
         spark.sql.warehouse.dir: "{{ env_var('SPARK_DATA_DIR', '../data/spark') }}/warehouse"
         spark.hadoop.javax.jdo.option.ConnectionURL: "jdbc:derby:;databaseName={{ env_var('SPARK_DATA_DIR', '../data/spark') }}/metastore_db;create=true"
-        # Parquet files written before and after a schema change have
-        # different columns. Merge them instead of using one file's schema.
-        spark.sql.parquet.mergeSchema: "true"
+        # from_protobuf lives in the spark-protobuf module, which isn't part
+        # of PySpark. Spark downloads it from Maven Central on first use and
+        # caches it in SPARK_IVY_DIR (must be an absolute path).
+        spark.jars.packages: org.apache.spark:spark-protobuf_2.13:4.2.0
+        spark.jars.ivy: "{{ env_var('SPARK_IVY_DIR', env_var('HOME') ~ '/.ivy2') }}"
         spark.sql.session.timeZone: UTC
         spark.ui.enabled: "false"

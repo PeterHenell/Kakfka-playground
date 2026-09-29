@@ -1,6 +1,3 @@
 # Code generation (protoc) and the protobuf runtime
 grpcio-tools==1.84.0
 protobuf==7.36.2
-# protobuf -> Arrow/Parquet
-protarrow==0.16.0
-pyarrow==25.0.1

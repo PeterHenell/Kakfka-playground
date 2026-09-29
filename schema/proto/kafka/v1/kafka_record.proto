@@ -1,0 +1,30 @@
+// Container format for the files the protobuf consumer writes.
+//
+// Each file holds one KafkaRecordBatch: the Kafka records exactly as they
+// were read, i.e. the message bytes plus where they came from. The message
+// bytes are not decoded by the consumer; Spark decodes them later with
+// from_protobuf, using the descriptor set written next to the files.
+syntax = "proto3";
+
+package kafka.v1;
+
+import "google/protobuf/timestamp.proto";
+
+message KafkaRecordBatch {
+  repeated KafkaRecord records = 1;
+}
+
+message KafkaRecord {
+  string topic = 1;
+  int32 partition = 2;
+  int64 offset = 3;
+  // The record's Kafka timestamp (set by the producer).
+  google.protobuf.Timestamp timestamp = 4;
+  string key = 5;
+  // Full protobuf name of the message in `value`, from the message-type header.
+  string message_type = 6;
+  // The serialized protobuf message.
+  bytes value = 7;
+  // When the consumer read the record.
+  google.protobuf.Timestamp ingested_at = 8;
+}

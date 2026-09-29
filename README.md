@@ -8,13 +8,14 @@ same stream, each in its own consumer group:
 
 - **consumer** stores the messages in an ELK stack (Elasticsearch, Logstash,
   Kibana), where you can search, chart and map them in near real time.
-- **parquet-consumer** writes the messages to Parquet files, which a
-  [dbt project](dbt/README.md) turns into analytics tables with Apache Spark.
-  The same dbt project can be deployed to Databricks as an Asset Bundle.
+- **protobuf-consumer** archives the messages, still in binary protobuf, to
+  files. A [dbt project](dbt/README.md) decodes them with Apache Spark and
+  turns them into analytics tables. The same dbt project can be deployed to
+  Databricks as an Asset Bundle.
 
 The message format is defined once, in a `.proto` file. Everything else
-(the Python classes, the conversion to Elasticsearch documents and Parquet
-files, the Elasticsearch mapping) follows from it; see
+(the Python classes, the conversion to Elasticsearch documents, the
+Elasticsearch mapping, the schema Spark decodes with) follows from it; see
 [The message schema](#the-message-schema).
 
 ```
@@ -24,11 +25,11 @@ files, the Elasticsearch mapping) follows from it; see
 │ (python) │    │ topic vehicle-telemetry │    │ (python) │    │ (HTTP)   │    │               │    │        │
 └──────────┘    │ 3 partitions            │    └──────────┘    └──────────┘    └───────────────┘    └────────┘
                 └─────────────────────────┘
-                             │                   group parquet-writer
-                             │                 ┌──────────────────┐    ┌────────────────┐    ┌─────────────────┐
-                             └───────────────> │ parquet-consumer │ -> │ data/parquet/  │ -> │ dbt + Spark     │
-                                               │ (python)         │    │ *.parquet      │    │ (or Databricks) │
-                                               └──────────────────┘    └────────────────┘    └─────────────────┘
+                             │                   group protobuf-writer
+                             │                 ┌───────────────────┐    ┌────────────────┐    ┌─────────────────┐
+                             └───────────────> │ protobuf-consumer │ -> │ data/protobuf/ │ -> │ dbt + Spark     │
+                                               │ (python)          │    │ *.pb           │    │ (or Databricks) │
+                                               └───────────────────┘    └────────────────┘    └─────────────────┘
 ```
 
 Everything runs in a single Docker Compose project.
@@ -43,7 +44,7 @@ docker compose up -d --build
 ```
 
 The first start takes a minute or two while Elasticsearch and Kibana boot.
-Check progress with `docker compose ps` and `docker compose logs -f producer consumer parquet-consumer`.
+Check progress with `docker compose ps` and `docker compose logs -f producer consumer protobuf-consumer`.
 
 | Service       | URL                        | What it is                                      |
 |---------------|----------------------------|-------------------------------------------------|
@@ -54,7 +55,7 @@ Check progress with `docker compose ps` and `docker compose logs -f producer con
 | Kafka         | `localhost:9094`           | Bootstrap server for clients on your machine    |
 
 Stop everything with `docker compose down`. Add `-v` to also delete the stored
-Kafka and Elasticsearch data. The Parquet files and the Spark tables are in
+Kafka and Elasticsearch data. The protobuf files and the Spark tables are in
 `./data`; delete that folder to start over.
 
 ### Looking at the data in Kibana
@@ -70,9 +71,9 @@ A data view called **Vehicle telemetry** is created automatically.
 - **Dashboards**: build charts of e.g. average `speed_kmh` or maximum
   `engine_temp_c` per `vehicle_id` over time.
 
-### Processing the Parquet files with dbt
+### Processing the protobuf files with dbt
 
-The parquet consumer writes a file to `data/parquet/vehicle_telemetry/event_date=YYYY-MM-DD/`
+The protobuf consumer writes a file to `data/protobuf/vehicle_telemetry/date=YYYY-MM-DD/`
 every 60 seconds (or every 5000 messages). Once the first file is there, build
 the dbt models on Spark:
 
@@ -91,10 +92,10 @@ project to Databricks as a Databricks Asset Bundle.
 | `docker-compose.yml`                   | All services                                                      |
 | `schema/proto/`                        | The protobuf message definitions                                  |
 | `schema/generate.py`                   | Generates code and the Elasticsearch mapping from the .proto files |
-| `schema/telemetry_schema/`             | Shared converters: protobuf to Elasticsearch and to Parquet        |
+| `schema/telemetry_schema/`             | Shared code: finding message classes, protobuf to Elasticsearch   |
 | `producer/producer.py`                 | Vehicle simulator, publishes to Kafka                             |
 | `consumer/consumer.py`                 | Reads from Kafka, posts batches to Logstash                       |
-| `parquet-consumer/parquet_consumer.py` | Reads from Kafka, writes Parquet files to `./data/parquet`        |
+| `protobuf-consumer/protobuf_consumer.py` | Reads from Kafka, writes binary protobuf files to `./data/protobuf` |
 | `dbt/`                                 | dbt project (Spark locally) and Databricks Asset Bundle           |
 | `elk/logstash/pipeline/*.conf`         | Logstash pipeline: HTTP in, Elasticsearch out                     |
 | `elk/setup/setup.py`                   | Installs the generated index template and the Kibana data view    |
@@ -146,8 +147,9 @@ services need, in `schema/generated/`:
 | Output                                  | Made by                       | Used by                              |
 |-----------------------------------------|-------------------------------|--------------------------------------|
 | `vehicle/v1/vehicle_telemetry_pb2.py`   | `protoc` (via `grpcio-tools`) | all services, to (de)serialize       |
+| `kafka/v1/kafka_record_pb2.py`          | `protoc`                      | protobuf-consumer, file format       |
+| `descriptors/descriptor_set.desc`       | `protoc`                      | Spark's `from_protobuf`, to decode   |
 | `elasticsearch/index_template.json`     | `telemetry_schema/elk.py`     | `elk-setup`, to create the mapping   |
-| `parquet/schema.txt`                    | `telemetry_schema/parquet.py` | nothing; shows the Parquet columns   |
 
 The conversions at runtime don't use any hand-written, per-field code. They
 walk the protobuf *descriptors*, the schema information that `protoc` embeds
@@ -158,15 +160,47 @@ in the generated code:
   `telemetry_schema/elk.py`. It maps each protobuf type to an Elasticsearch
   type and honors a custom field option for special cases:
   `Position position = 6 [(elk.field_type) = "geo_point"];`.
-- **Parquet**: [protarrow](https://github.com/tradewelltech/protarrow)
-  converts messages to Apache Arrow tables. Nested messages become structs,
-  repeated fields become lists, and Timestamps become timestamp columns.
+- **Spark**: the protobuf consumer doesn't decode anything. It stores the
+  Kafka records as they are, and Spark decodes them with its built-in
+  [`from_protobuf`](https://spark.apache.org/docs/latest/sql-data-sources-protobuf.html)
+  function, using the *descriptor set* (the compiled schema) that the consumer
+  writes next to the files. Nested messages become structs, repeated fields
+  become arrays, enums become their names, and Timestamps become timestamps.
 - **Kafka UI** decodes the messages with its built-in `ProtobufFile` serde,
   reading the same `.proto` files.
 
-The consumers pick the message class by the `message-type` header. They
-contain no field names, except the Parquet consumer's date partitioning,
-which uses the `timestamp` field.
+The ELK consumer picks the message class by the `message-type` header, and
+the protobuf consumer stores the header with each record. Neither contains
+any field names.
+
+### The protobuf files
+
+Each file is one `kafka.v1.KafkaRecordBatch` message
+([`kafka_record.proto`](schema/proto/kafka/v1/kafka_record.proto)): a list
+of Kafka records, each with the original message bytes, the message type,
+and the topic, partition, offset and timestamp.
+
+```
+data/protobuf/vehicle_telemetry/
+├── _schema/descriptor_set.desc              the compiled schema, rewritten on every start
+└── date=2026-09-29/                         the date of the Kafka timestamp
+    ├── part-20260929T100733-2ad5872b.pb     one KafkaRecordBatch per file
+    └── part-20260929T100833-4c021d36.pb
+```
+
+Decoding takes two `from_protobuf` calls: one for the file, one for each
+record's bytes. See `dbt/src/macros/telemetry_source.sql`, or try it in the
+Spark SQL shell (`docker compose run --rm spark-sql`):
+
+```sql
+select from_protobuf(record.value, 'vehicle.v1.VehicleTelemetry', '/data/protobuf/vehicle_telemetry/_schema/descriptor_set.desc',
+                     map('emit.default.values', 'true')) as message
+from (
+  select explode(from_protobuf(content, 'kafka.v1.KafkaRecordBatch', '/data/protobuf/vehicle_telemetry/_schema/descriptor_set.desc').records) as record
+  from binaryFile.`/data/protobuf/vehicle_telemetry`
+)
+limit 5;
+```
 
 ### Changing the schema
 
@@ -179,10 +213,11 @@ The result:
 
 - New Elasticsearch documents contain the field. `elk-setup` updates the
   index template and adds the field to the mapping of existing indices.
-- New Parquet files get a column for it. Spark merges the schemas of old and
-  new files, so in old rows the column is `null`.
-- Messages still in Kafka that were produced with the old schema are read
-  with the new one; missing fields get their default value (0, "", false).
+- The protobuf consumer writes the new descriptor set, so Spark can decode
+  the field. It decodes the older files with the new schema too; in messages
+  from before the change, the field has its default value (0, "", false).
+- The same goes for messages still in Kafka that were produced with the old
+  schema.
 
 To keep old and new messages compatible, only add fields with new numbers.
 Never change the number or type of an existing field, and `reserve` the
@@ -200,7 +235,7 @@ there.
 - **Logstash** uses `message_id` as the Elasticsearch document id, so
   messages that are delivered twice overwrite the same document instead of
   creating a duplicate.
-- The **parquet consumer** also commits only after a file is written. A file
+- The **protobuf consumer** also commits only after a file is written. A file
   can't be "overwritten" like a document, so duplicates are removed later, in
   the dbt staging model.
 
@@ -217,7 +252,7 @@ python schema/generate.py          # again after every .proto change
 
 python producer/producer.py
 python consumer/consumer.py
-python parquet-consumer/parquet_consumer.py
+python protobuf-consumer/protobuf_consumer.py
 ```
 
 The scripts are configured with environment variables. The docstring at the
@@ -232,7 +267,7 @@ The converters have unit tests: `pip install pytest && python -m pytest schema/t
    `container_name: consumer` line), or run `python consumer/consumer.py`
    on your machine. Watch the `Assigned partitions` lines in the logs as Kafka
    rebalances the 3 partitions. What happens with 4 consumers?
-2. **Consumer groups.** `elk-writer` and `parquet-writer` both read every
+2. **Consumer groups.** `elk-writer` and `protobuf-writer` both read every
    message, independently. Add a third group by running
    `KAFKA_GROUP_ID=my-group python consumer/consumer.py`. The new group gets
    its own copy of every message, starting from the beginning of the topic.
@@ -242,7 +277,7 @@ The converters have unit tests: `pip install pytest && python -m pytest schema/t
    docker exec kafka /opt/kafka/bin/kafka-consumer-groups.sh \
      --bootstrap-server localhost:9092 --describe --group elk-writer
    ```
-   Start it again and watch it catch up. Compare with `parquet-writer`: its lag
+   Start it again and watch it catch up. Compare with `protobuf-writer`: its lag
    grows for up to a minute and then drops to 0, because it only commits after
    writing a file.
 4. **Kafka CLI tools.** The broker image comes with the standard tools:
@@ -263,7 +298,7 @@ The converters have unit tests: `pip install pytest && python -m pytest schema/t
    docker compose start consumer
    ```
 6. **Evolve the schema.** Follow [Changing the schema](#changing-the-schema) to add a
-   field, then find it in Kibana, Kafka UI and the Parquet files
+   field, then find it in Kibana, Kafka UI and Spark
    (`docker compose run --rm dbt show --inline "select ambient_temp_c, count(*) from {{ telemetry_source() }} group by 1"`).
    What happens if you change the type of an existing field instead?
 7. **Break things.** Stop Logstash (`docker compose stop logstash`) and see the
