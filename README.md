@@ -2,14 +2,20 @@
 
 A small, self-contained setup for learning Apache Kafka. A Python producer
 simulates a fleet of vehicles that send telemetry (position, speed, engine
-temperature, fuel level, tire pressure...) to Kafka. Two consumers read the
+temperature, fuel level, tire pressure...) to Kafka as
+[Protocol Buffers](https://protobuf.dev/) messages. Two consumers read the
 same stream, each in its own consumer group:
 
 - **consumer** stores the messages in an ELK stack (Elasticsearch, Logstash,
   Kibana), where you can search, chart and map them in near real time.
 - **parquet-consumer** writes the messages to Parquet files, which a
-  [dbt project](dbt/README.md) turns into analytics tables with DuckDB. The
-  same dbt project can be deployed to Databricks as an Asset Bundle.
+  [dbt project](dbt/README.md) turns into analytics tables with Apache Spark.
+  The same dbt project can be deployed to Databricks as an Asset Bundle.
+
+The message format is defined once, in a `.proto` file. Everything else
+(the Python classes, the conversion to Elasticsearch documents and Parquet
+files, the Elasticsearch mapping) follows from it; see
+[The message schema](#the-message-schema).
 
 ```
                                                  group elk-writer
@@ -20,7 +26,7 @@ same stream, each in its own consumer group:
                 └─────────────────────────┘
                              │                   group parquet-writer
                              │                 ┌──────────────────┐    ┌────────────────┐    ┌─────────────────┐
-                             └───────────────> │ parquet-consumer │ -> │ data/parquet/  │ -> │ dbt + DuckDB    │
+                             └───────────────> │ parquet-consumer │ -> │ data/parquet/  │ -> │ dbt + Spark     │
                                                │ (python)         │    │ *.parquet      │    │ (or Databricks) │
                                                └──────────────────┘    └────────────────┘    └─────────────────┘
 ```
@@ -42,21 +48,21 @@ Check progress with `docker compose ps` and `docker compose logs -f producer con
 | Service       | URL                        | What it is                                      |
 |---------------|----------------------------|-------------------------------------------------|
 | Kibana        | http://localhost:5601      | Explore the stored telemetry                    |
-| Kafka UI      | http://localhost:8080      | Browse topics, messages, consumer groups        |
+| Kafka UI      | http://localhost:8080      | Topics, decoded messages, consumer groups       |
 | Elasticsearch | http://localhost:9200      | REST API for the stored data                    |
 | Logstash      | http://localhost:8081      | HTTP input the consumer posts to                |
 | Kafka         | `localhost:9094`           | Bootstrap server for clients on your machine    |
 
 Stop everything with `docker compose down`. Add `-v` to also delete the stored
-Kafka and Elasticsearch data. The Parquet files and the DuckDB database are
-in `./data`; delete that folder to start over.
+Kafka and Elasticsearch data. The Parquet files and the Spark tables are in
+`./data`; delete that folder to start over.
 
 ### Looking at the data in Kibana
 
 A data view called **Vehicle telemetry** is created automatically.
 
 - **Discover** (menu → Analytics → Discover): see the raw messages. Try the
-  queries `events : "harsh_braking"`, `engine_temp_c > 100` or
+  queries `events : "HARSH_BRAKING"`, `engine_temp_c > 100` or
   `check_engine_light : true`.
 - **Maps** (menu → Analytics → Maps): add a *Documents* layer on the
   *Vehicle telemetry* data view to watch the vehicles move around Stockholm.
@@ -68,7 +74,7 @@ A data view called **Vehicle telemetry** is created automatically.
 
 The parquet consumer writes a file to `data/parquet/vehicle_telemetry/event_date=YYYY-MM-DD/`
 every 60 seconds (or every 5000 messages). Once the first file is there, build
-the dbt models on DuckDB:
+the dbt models on Spark:
 
 ```bash
 docker compose run --rm dbt build
@@ -83,12 +89,16 @@ project to Databricks as a Databricks Asset Bundle.
 | Path                                   | Description                                                       |
 |----------------------------------------|-------------------------------------------------------------------|
 | `docker-compose.yml`                   | All services                                                      |
+| `schema/proto/`                        | The protobuf message definitions                                  |
+| `schema/generate.py`                   | Generates code and the Elasticsearch mapping from the .proto files |
+| `schema/telemetry_schema/`             | Shared converters: protobuf to Elasticsearch and to Parquet        |
 | `producer/producer.py`                 | Vehicle simulator, publishes to Kafka                             |
 | `consumer/consumer.py`                 | Reads from Kafka, posts batches to Logstash                       |
 | `parquet-consumer/parquet_consumer.py` | Reads from Kafka, writes Parquet files to `./data/parquet`        |
-| `dbt/`                                 | dbt project (DuckDB locally) and Databricks Asset Bundle          |
+| `dbt/`                                 | dbt project (Spark locally) and Databricks Asset Bundle           |
 | `elk/logstash/pipeline/*.conf`         | Logstash pipeline: HTTP in, Elasticsearch out                     |
-| `elk/setup/setup.sh`                   | Creates the Elasticsearch index template and the Kibana data view |
+| `elk/setup/setup.py`                   | Installs the generated index template and the Kibana data view    |
+| `kafka-ui/config.yml`                  | Lets Kafka UI decode the protobuf messages                        |
 
 ### A telemetry message
 
@@ -96,32 +106,89 @@ The producer uses `vehicle_id` as the message **key**. Kafka hashes the key
 to choose a partition, so all messages from one vehicle go to the same
 partition and keep their order.
 
+The value is a `vehicle.v1.VehicleTelemetry` protobuf message, and a
+`message-type` header names that type. As a document in Elasticsearch, a
+message looks like this:
+
 ```json
 {
-  "message_id": "0b4b4a87-295c-4e31-bbf3-f06489035740",
-  "vehicle_id": "vehicle-001",
-  "vin": "7DNKTFZ2314N1LCN5",
-  "vehicle_type": "bus",
-  "timestamp": "2026-09-29T05:55:42.638+00:00",
-  "position": { "lat": 59.325754, "lon": 18.037084 },
-  "heading_deg": 255.0,
-  "speed_kmh": 8.6,
-  "rpm": 1720,
-  "gear": 1,
-  "engine_temp_c": 39.8,
-  "fuel_level_pct": 89.56,
-  "battery_voltage": 14.38,
-  "odometer_km": 162871.571,
-  "tire_pressure_kpa": { "front_left": 230.6, "front_right": 221.0, "rear_left": 232.8, "rear_right": 229.2 },
-  "check_engine_light": false,
-  "dtc_codes": [],
-  "events": []
+  "message_id": "c00e4bbc-e4b7-41c2-a3cf-d432c3a5b0a6",
+  "vehicle_id": "vehicle-003",
+  "vin": "HUNWXCA4JH9S4SYEX",
+  "vehicle_type": "BUS",
+  "timestamp": "2026-09-29T08:02:54.428502Z",
+  "position": { "lat": 59.351242, "lon": 18.090492 },
+  "heading_deg": 357.2,
+  "speed_kmh": 47.0,
+  "rpm": 1109,
+  "gear": 3,
+  "engine_temp_c": 111.6,
+  "fuel_level_pct": 54.02,
+  "battery_voltage": 14.07,
+  "odometer_km": 186607.526,
+  "tire_pressure_kpa": { "front_left": 230.4, "front_right": 227.9, "rear_left": 226.0, "rear_right": 213.8 },
+  "check_engine_light": true,
+  "dtc_codes": ["P0217"],
+  "events": ["ENGINE_OVERHEATING"]
 }
 ```
 
 Some simulated vehicles have a faulty cooling system or a leaking tire, so
-over time you will see events like `engine_overheating`, `low_tire_pressure`,
-`harsh_braking`, `speeding` and `low_fuel`, along with diagnostic trouble codes.
+over time you will see events like `ENGINE_OVERHEATING`, `LOW_TIRE_PRESSURE`,
+`HARSH_BRAKING`, `SPEEDING` and `LOW_FUEL`, along with diagnostic trouble codes.
+
+## The message schema
+
+[`schema/proto/vehicle/v1/vehicle_telemetry.proto`](schema/proto/vehicle/v1/vehicle_telemetry.proto)
+defines the message. `schema/generate.py` turns it into everything the
+services need, in `schema/generated/`:
+
+| Output                                  | Made by                       | Used by                              |
+|-----------------------------------------|-------------------------------|--------------------------------------|
+| `vehicle/v1/vehicle_telemetry_pb2.py`   | `protoc` (via `grpcio-tools`) | all services, to (de)serialize       |
+| `elasticsearch/index_template.json`     | `telemetry_schema/elk.py`     | `elk-setup`, to create the mapping   |
+| `parquet/schema.txt`                    | `telemetry_schema/parquet.py` | nothing; shows the Parquet columns   |
+
+The conversions at runtime don't use any hand-written, per-field code. They
+walk the protobuf *descriptors*, the schema information that `protoc` embeds
+in the generated code:
+
+- **Elasticsearch**: protobuf's own [`json_format`](https://googleapis.dev/python/protobuf/latest/google/protobuf/json_format.html)
+  turns a message into a JSON document. The index mapping comes from
+  `telemetry_schema/elk.py`. It maps each protobuf type to an Elasticsearch
+  type and honors a custom field option for special cases:
+  `Position position = 6 [(elk.field_type) = "geo_point"];`.
+- **Parquet**: [protarrow](https://github.com/tradewelltech/protarrow)
+  converts messages to Apache Arrow tables. Nested messages become structs,
+  repeated fields become lists, and Timestamps become timestamp columns.
+- **Kafka UI** decodes the messages with its built-in `ProtobufFile` serde,
+  reading the same `.proto` files.
+
+The consumers pick the message class by the `message-type` header. They
+contain no field names, except the Parquet consumer's date partitioning,
+which uses the `timestamp` field.
+
+### Changing the schema
+
+1. Edit the `.proto` file, e.g. add `double ambient_temp_c = 19;`.
+2. Set the new field in `producer/producer.py`.
+3. Rebuild and restart: `docker compose up -d --build`. Each image runs
+   `schema/generate.py` while it is built.
+
+The result:
+
+- New Elasticsearch documents contain the field. `elk-setup` updates the
+  index template and adds the field to the mapping of existing indices.
+- New Parquet files get a column for it. Spark merges the schemas of old and
+  new files, so in old rows the column is `null`.
+- Messages still in Kafka that were produced with the old schema are read
+  with the new one; missing fields get their default value (0, "", false).
+
+To keep old and new messages compatible, only add fields with new numbers.
+Never change the number or type of an existing field, and `reserve` the
+numbers of removed fields. The dbt models list the columns they use, so add
+new fields to `dbt/src/models/staging/stg_vehicle_telemetry.sql` to use them
+there.
 
 ### Delivery guarantees
 
@@ -146,14 +213,17 @@ on your machine (they connect to `localhost:9094` by default):
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+python schema/generate.py          # again after every .proto change
 
 python producer/producer.py
 python consumer/consumer.py
 python parquet-consumer/parquet_consumer.py
 ```
 
-Both scripts are configured with environment variables. The docstring at the
+The scripts are configured with environment variables. The docstring at the
 top of each script lists them, for example `NUM_VEHICLES=20 INTERVAL_SECONDS=0.2 python producer/producer.py`.
+
+The converters have unit tests: `pip install pytest && python -m pytest schema/tests`.
 
 ## Things to try
 
@@ -179,8 +249,10 @@ top of each script lists them, for example `NUM_VEHICLES=20 INTERVAL_SECONDS=0.2
    ```bash
    docker exec kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --describe --topic vehicle-telemetry
    docker exec -it kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 \
-     --topic vehicle-telemetry --property print.key=true --property print.partition=true
+     --topic vehicle-telemetry --property print.key=true --property print.headers=true
    ```
+   The values are binary protobuf, so they look garbled. That's the price of
+   a compact format: you need the schema to read them (as Kafka UI does).
 5. **Replay.** Reset the group's offsets to the beginning (stop the consumer first) and
    notice that Elasticsearch doesn't get duplicates, because documents are keyed by
    `message_id`:
@@ -190,7 +262,11 @@ top of each script lists them, for example `NUM_VEHICLES=20 INTERVAL_SECONDS=0.2
      --group elk-writer --topic vehicle-telemetry --reset-offsets --to-earliest --execute
    docker compose start consumer
    ```
-6. **Break things.** Stop Logstash (`docker compose stop logstash`) and see the
+6. **Evolve the schema.** Follow [Changing the schema](#changing-the-schema) to add a
+   field, then find it in Kibana, Kafka UI and the Parquet files
+   (`docker compose run --rm dbt show --inline "select ambient_temp_c, count(*) from {{ telemetry_source() }} group by 1"`).
+   What happens if you change the type of an existing field instead?
+7. **Break things.** Stop Logstash (`docker compose stop logstash`) and see the
    consumer retry without committing. Stop Kafka and see what the producer does.
 
 ## Notes

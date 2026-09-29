@@ -1,4 +1,6 @@
-# For running the producer/consumer scripts directly on your machine
+# For running the producer and consumers directly on your machine.
+# (dbt has its own requirements in dbt/requirements.txt; install those in a
+# separate virtual environment.)
+-r schema/requirements.txt
 confluent-kafka==2.6.1
 requests==2.32.3
-pyarrow==25.0.1

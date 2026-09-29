@@ -14,7 +14,7 @@ resources:
           environment_key: dbt
           dbt_task:
             project_directory: ../
-            # Databricks profiles; ../profiles.yml is only for local DuckDB runs.
+            # Databricks profiles; ../profiles.yml is only for local Spark runs.
             profiles_directory: dbt_profiles/
             warehouse_id: ${var.warehouse_id}
             commands:

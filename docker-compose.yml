@@ -1,7 +1,11 @@
 # Kafka learning playground
 #
 #   producer (python) --> Kafka --+--> consumer (python) ---------> Logstash --> Elasticsearch --> Kibana
-#                                 +--> parquet-consumer (python) --> ./data/parquet --> dbt + DuckDB
+#                                 +--> parquet-consumer (python) --> ./data/parquet --> dbt + Spark
+#
+# Messages are protobuf, defined in schema/proto. The Python images generate
+# their protobuf code while being built, so after changing a .proto file run:
+#   docker compose up -d --build
 #
 # Start everything:   docker compose up -d --build
 # Kibana:             http://localhost:5601
@@ -53,8 +57,10 @@ services:
     ports:
       - "8080:8080"
     environment:
-      KAFKA_CLUSTERS_0_NAME: playground
-      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+      SPRING_CONFIG_ADDITIONAL-LOCATION: /config.yml
+    volumes:
+      - ./kafka-ui/config.yml:/config.yml:ro
+      - ./schema/proto:/protofiles:ro
     depends_on:
       kafka:
         condition: service_healthy
@@ -116,14 +122,14 @@ services:
       timeout: 5s
       retries: 30
 
-  # One-shot job: installs the Elasticsearch index template (so `position` is
-  # a geo_point and can be shown on a map) and creates a Kibana data view.
+  # One-shot job: installs the Elasticsearch index template generated from
+  # the .proto files (so e.g. `position` is a geo_point and can be shown on a
+  # map) and creates a Kibana data view.
   elk-setup:
-    image: curlimages/curl:8.11.1
+    build:
+      context: .
+      dockerfile: elk/setup/Dockerfile
     container_name: elk-setup
-    volumes:
-      - ./elk/setup:/setup:ro
-    entrypoint: ["/bin/sh", "/setup/setup.sh"]
     depends_on:
       elasticsearch:
         condition: service_healthy
@@ -133,7 +139,9 @@ services:
 
   # ------------------------------------------------------- Python clients ---
   producer:
-    build: ./producer
+    build:
+      context: .
+      dockerfile: producer/Dockerfile
     container_name: producer
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
@@ -146,7 +154,9 @@ services:
     restart: unless-stopped
 
   consumer:
-    build: ./consumer
+    build:
+      context: .
+      dockerfile: consumer/Dockerfile
     container_name: consumer
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
@@ -165,7 +175,9 @@ services:
   # Second consumer group: writes the same stream to Parquet files in
   # ./data/parquet, for the dbt project to process.
   parquet-consumer:
-    build: ./parquet-consumer
+    build:
+      context: .
+      dockerfile: parquet-consumer/Dockerfile
     container_name: parquet-consumer
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
@@ -181,18 +193,39 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
-  # dbt on DuckDB, run on demand (it is not started by `docker compose up`):
+  # dbt on Apache Spark (in-process PySpark), run on demand (it is not
+  # started by `docker compose up`):
   #   docker compose run --rm dbt build
   #   docker compose run --rm dbt show --select fct_vehicle_daily
   dbt:
     build: ./dbt
+    image: kafka-playground-dbt
     profiles: ["dbt"]
     working_dir: /dbt
     environment:
       PARQUET_PATH: /data/parquet/vehicle_telemetry
-      DUCKDB_PATH: /data/vehicle_telemetry.duckdb
+      SPARK_DATA_DIR: /data/spark
     volumes:
       - ./dbt:/dbt
+      - ./data:/data
+
+  # Interactive Spark SQL shell on the tables dbt built:
+  #   docker compose run --rm spark-sql
+  #   spark-sql> select * from vehicle_telemetry.fct_vehicle_daily;
+  spark-sql:
+    build: ./dbt
+    image: kafka-playground-dbt
+    profiles: ["dbt"]
+    working_dir: /data/spark
+    entrypoint:
+      - spark-sql
+      - --conf
+      - spark.sql.warehouse.dir=/data/spark/warehouse
+      - --conf
+      - spark.hadoop.javax.jdo.option.ConnectionURL=jdbc:derby:;databaseName=/data/spark/metastore_db;create=true
+      - --conf
+      - spark.ui.enabled=false
+    volumes:
       - ./data:/data
 
 volumes:

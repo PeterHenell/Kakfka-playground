@@ -1,0 +1,73 @@
+// Telemetry message sent by every vehicle, once per tick.
+//
+// This file is the single source of truth for the message format. After
+// changing it, regenerate the code (python schema/generate.py, or rebuild the
+// containers with docker compose up -d --build) and the producer, both
+// consumers and the Elasticsearch mapping pick up the new schema.
+//
+// Rules for changing it without breaking old messages still in Kafka:
+//   - Add new fields with new field numbers.
+//   - Never change the number or type of an existing field.
+//   - When removing a field, reserve its number and name
+//     (reserved 7; reserved "heading_deg";) so they are never reused.
+syntax = "proto3";
+
+package vehicle.v1;
+
+import "elk/options.proto";
+import "google/protobuf/timestamp.proto";
+
+message VehicleTelemetry {
+  // Unique per message. Used to de-duplicate at-least-once deliveries.
+  string message_id = 1;
+  string vehicle_id = 2;
+  string vin = 3;
+  VehicleType vehicle_type = 4;
+  // When the vehicle took the reading.
+  google.protobuf.Timestamp timestamp = 5;
+  Position position = 6 [(elk.field_type) = "geo_point"];
+  double heading_deg = 7;
+  double speed_kmh = 8;
+  int32 rpm = 9;
+  int32 gear = 10;
+  double engine_temp_c = 11;
+  double fuel_level_pct = 12;
+  double battery_voltage = 13;
+  double odometer_km = 14;
+  TirePressure tire_pressure_kpa = 15;
+  bool check_engine_light = 16;
+  // Diagnostic trouble codes, e.g. "P0217".
+  repeated string dtc_codes = 17;
+  repeated Event events = 18;
+}
+
+message Position {
+  double lat = 1;
+  double lon = 2;
+}
+
+message TirePressure {
+  double front_left = 1;
+  double front_right = 2;
+  double rear_left = 3;
+  double rear_right = 4;
+}
+
+enum VehicleType {
+  VEHICLE_TYPE_UNSPECIFIED = 0;
+  CAR = 1;
+  VAN = 2;
+  TRUCK = 3;
+  BUS = 4;
+}
+
+enum Event {
+  EVENT_UNSPECIFIED = 0;
+  HARSH_BRAKING = 1;
+  HARSH_ACCELERATION = 2;
+  SPEEDING = 3;
+  ENGINE_OVERHEATING = 4;
+  LOW_FUEL = 5;
+  REFUELED = 6;
+  LOW_TIRE_PRESSURE = 7;
+}
