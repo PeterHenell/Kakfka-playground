@@ -10,47 +10,96 @@
 //   - Never change the number or type of an existing field.
 //   - When removing a field, reserve its number and name
 //     (reserved 7; reserved "heading_deg";) so they are never reused.
+//
+// The [(buf.validate.field)...] annotations are validation rules in the
+// protovalidate format (https://protovalidate.com). They describe what a
+// valid message looks like beyond its types: required fields, ranges,
+// patterns. schema/generate.py turns them into dbt tests that check the
+// archived messages (see dbt/src/models/sources/).
 syntax = "proto3";
 
 package vehicle.v1;
 
+import "buf/validate/validate.proto";
 import "elk/options.proto";
 import "google/protobuf/timestamp.proto";
 
 message VehicleTelemetry {
   // Unique per message. Used to de-duplicate at-least-once deliveries.
-  string message_id = 1;
-  string vehicle_id = 2;
-  string vin = 3;
-  VehicleType vehicle_type = 4;
+  string message_id = 1 [(buf.validate.field).string.uuid = true];
+  string vehicle_id = 2 [(buf.validate.field).string.pattern = "^vehicle-[0-9]{3}$"];
+  // Vehicle identification number: always 17 characters.
+  string vin = 3 [(buf.validate.field).string.len = 17];
+  VehicleType vehicle_type = 4 [
+    (buf.validate.field).enum.defined_only = true,
+    (buf.validate.field).enum.not_in = 0
+  ];
   // When the vehicle took the reading.
-  google.protobuf.Timestamp timestamp = 5;
-  Position position = 6 [(elk.field_type) = "geo_point"];
-  double heading_deg = 7;
-  double speed_kmh = 8;
-  int32 rpm = 9;
-  int32 gear = 10;
-  double engine_temp_c = 11;
-  double fuel_level_pct = 12;
-  double battery_voltage = 13;
-  double odometer_km = 14;
-  TirePressure tire_pressure_kpa = 15;
+  google.protobuf.Timestamp timestamp = 5 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).timestamp.lt_now = true
+  ];
+  Position position = 6 [
+    (elk.field_type) = "geo_point",
+    (buf.validate.field).required = true
+  ];
+  double heading_deg = 7 [
+    (buf.validate.field).double.gte = 0,
+    (buf.validate.field).double.lt = 360
+  ];
+  double speed_kmh = 8 [
+    (buf.validate.field).double.gte = 0,
+    (buf.validate.field).double.lte = 250
+  ];
+  int32 rpm = 9 [
+    (buf.validate.field).int32.gte = 0,
+    (buf.validate.field).int32.lte = 10000
+  ];
+  // 0 is neutral.
+  int32 gear = 10 [
+    (buf.validate.field).int32.gte = 0,
+    (buf.validate.field).int32.lte = 8
+  ];
+  double engine_temp_c = 11 [
+    (buf.validate.field).double.gte = -40,
+    (buf.validate.field).double.lte = 150
+  ];
+  double fuel_level_pct = 12 [
+    (buf.validate.field).double.gte = 0,
+    (buf.validate.field).double.lte = 100
+  ];
+  double battery_voltage = 13 [
+    (buf.validate.field).double.gte = 0,
+    (buf.validate.field).double.lte = 30
+  ];
+  double odometer_km = 14 [(buf.validate.field).double.gte = 0];
+  TirePressure tire_pressure_kpa = 15 [(buf.validate.field).required = true];
   bool check_engine_light = 16;
   // Diagnostic trouble codes, e.g. "P0217".
-  repeated string dtc_codes = 17;
-  repeated Event events = 18;
+  repeated string dtc_codes = 17 [(buf.validate.field).repeated.items.string.pattern = "^[PCBU][0-9]{4}$"];
+  repeated Event events = 18 [
+    (buf.validate.field).repeated.unique = true,
+    (buf.validate.field).repeated.items.enum.defined_only = true,
+    (buf.validate.field).repeated.items.enum.not_in = 0
+  ];
 }
 
 message Position {
-  double lat = 1;
-  double lon = 2;
+  double lat = 1 [
+    (buf.validate.field).double.gte = -90,
+    (buf.validate.field).double.lte = 90
+  ];
+  double lon = 2 [
+    (buf.validate.field).double.gte = -180,
+    (buf.validate.field).double.lte = 180
+  ];
 }
 
 message TirePressure {
-  double front_left = 1;
-  double front_right = 2;
-  double rear_left = 3;
-  double rear_right = 4;
+  double front_left = 1 [(buf.validate.field).double = {gte: 0, lte: 500}];
+  double front_right = 2 [(buf.validate.field).double = {gte: 0, lte: 500}];
+  double rear_left = 3 [(buf.validate.field).double = {gte: 0, lte: 500}];
+  double rear_right = 4 [(buf.validate.field).double = {gte: 0, lte: 500}];
 }
 
 enum VehicleType {

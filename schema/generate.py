@@ -12,12 +12,19 @@ Writes to schema/generated/ (not committed, recreated on every run):
                                           Spark's from_protobuf decodes with it
     elasticsearch/index_template.json     Elasticsearch index template
 
+and, when the dbt project is next to it, the dbt source tests that check the
+archived messages against the schema (committed, so they can be reviewed):
+
+    dbt/src/models/sources/raw_vehicle_telemetry.yml
+
 The Docker images run this script while they are built, so after changing a
 .proto file, `docker compose up -d --build` is all it takes.
 
 Configuration (environment variables):
-    MESSAGE_TYPE    default: vehicle.v1.VehicleTelemetry
-    INDEX_PATTERN   default: vehicle-telemetry-*
+    MESSAGE_TYPE     default: vehicle.v1.VehicleTelemetry
+    INDEX_PATTERN    default: vehicle-telemetry-*
+    ARCHIVE_NAME     default: vehicle_telemetry (names the dbt source tables)
+    DBT_SOURCES_DIR  default: dbt/src/models/sources, if the dbt project exists
 """
 
 import json
@@ -38,6 +45,11 @@ WELL_KNOWN_PROTOS_DIR = Path(grpc_tools.__file__).parent / "_proto"
 
 MESSAGE_TYPE = os.getenv("MESSAGE_TYPE", "vehicle.v1.VehicleTelemetry")
 INDEX_PATTERN = os.getenv("INDEX_PATTERN", "vehicle-telemetry-*")
+ARCHIVE_NAME = os.getenv("ARCHIVE_NAME", "vehicle_telemetry")
+DBT_PROJECT_DIR = SCHEMA_DIR.parent / "dbt"
+DBT_SOURCES_DIR = os.getenv("DBT_SOURCES_DIR") or (
+    str(DBT_PROJECT_DIR / "src" / "models" / "sources") if DBT_PROJECT_DIR.is_dir() else None
+)
 
 
 def generate_python() -> None:
@@ -89,6 +101,17 @@ def generate_index_template(message_type: type) -> None:
     print(f"Generated {path.relative_to(SCHEMA_DIR)}")
 
 
+def generate_dbt_source_tests(message_type: type) -> None:
+    from telemetry_schema import dbt_tests, message_class
+
+    message = message_type.DESCRIPTOR
+    record = message_class("kafka.v1.KafkaRecord").DESCRIPTOR
+    path = Path(DBT_SOURCES_DIR) / f"raw_{ARCHIVE_NAME}.yml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(dbt_tests.source_yaml(message, record, ARCHIVE_NAME, message.file.name))
+    print(f"Generated {path}")
+
+
 def main() -> None:
     shutil.rmtree(GENERATED_DIR, ignore_errors=True)
     DESCRIPTOR_SET.parent.mkdir(parents=True)
@@ -99,6 +122,8 @@ def main() -> None:
 
     message_type = message_class(MESSAGE_TYPE)
     generate_index_template(message_type)
+    if DBT_SOURCES_DIR:
+        generate_dbt_source_tests(message_type)
 
 
 if __name__ == "__main__":

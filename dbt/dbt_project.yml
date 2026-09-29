@@ -27,6 +27,13 @@ vars:
   # The protobuf message type to decode.
   message_type: vehicle.v1.VehicleTelemetry
 
+# Views over the raw protobuf files, used as dbt sources (see
+# macros/raw_protobuf_views.sql and src/models/sources/).
+on-run-start:
+  - "{{ create_raw_schema() }}"
+  - "{{ create_raw_files_view('vehicle_telemetry') }}"
+  - "{{ create_raw_records_view('vehicle_telemetry') }}"
+
 models:
   vehicle_telemetry:
     staging:

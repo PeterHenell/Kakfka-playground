@@ -1,47 +1,46 @@
 {#
-  Returns a relation with one row per message archived by the protobuf
-  consumer: the decoded message fields as columns, plus the Kafka
-  coordinates (kafka_partition, kafka_offset, kafka_timestamp, ingested_at).
+  Returns a relation with one row per archived message: the decoded message
+  fields as columns, plus the Kafka coordinates (kafka_partition,
+  kafka_offset, kafka_timestamp, ingested_at).
 
-  Each file is one kafka.v1.KafkaRecordBatch message. Spark decodes it in two
-  steps with from_protobuf, using the descriptor set the consumer writes next
-  to the files:
-
-    1. file bytes     -> KafkaRecordBatch -> one row per KafkaRecord (explode)
-    2. record.value   -> the message type in var('message_type'), e.g.
-                         vehicle.v1.VehicleTelemetry
+  It reads the raw_vehicle_telemetry_records source, a view with one row per
+  Kafka record (see macros/raw_protobuf_views.sql), and decodes each record's
+  `value` with Spark's from_protobuf into the message type in
+  var('message_type'), using the descriptor set the consumer writes next to
+  the files.
 
   The descriptor set always describes the newest schema. Protobuf decodes
   older messages with it too: fields that didn't exist yet get their default
   value.
+
+  Messages that aren't valid protobuf are skipped (PERMISSIVE mode). The
+  generated source tests in src/models/sources/ report them, and `dbt build`
+  doesn't build the models while those tests fail.
 #}
 {% macro telemetry_source() %}
-  {%- set descriptor = var('descriptor_path') -%}
   {%- set message_type = var('message_type') -%}
   (
     select
       decoded.*,
-      record.partition as kafka_partition,
-      record.offset as kafka_offset,
-      record.timestamp as kafka_timestamp,
-      record.ingested_at
+      `partition` as kafka_partition,
+      `offset` as kafka_offset,
+      `timestamp` as kafka_timestamp,
+      ingested_at
     from (
       select
-        record,
+        *,
         from_protobuf(
-          record.value,
+          value,
           '{{ message_type }}',
-          '{{ descriptor }}',
+          '{{ var("descriptor_path") }}',
           -- proto3 doesn't store fields that have their default value (0, "",
-          -- false). Without this option Spark would return them as null.
-          map('emit.default.values', 'true')
+          -- false). Without emit.default.values Spark would return them as null.
+          map('mode', 'PERMISSIVE', 'emit.default.values', 'true')
         ) as decoded
-      from (
-        select explode(from_protobuf(content, 'kafka.v1.KafkaRecordBatch', '{{ descriptor }}').records) as record
-        from {{ raw_protobuf_files() }}
-      )
-      where record.message_type = '{{ message_type }}'
-    )
+      from {{ source('raw', 'vehicle_telemetry_records') }}
+      where message_type = '{{ message_type }}'
+    ) as records
+    where decoded is not null
   )
 {% endmacro %}
 

@@ -1,3 +1,4 @@
 # Code generation (protoc) and the protobuf runtime
 grpcio-tools==1.84.0
 protobuf==7.36.2
+PyYAML==6.0.3

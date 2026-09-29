@@ -91,9 +91,10 @@ project to Databricks as a Databricks Asset Bundle.
 |----------------------------------------|-------------------------------------------------------------------|
 | `docker-compose.yml`                   | All services                                                      |
 | `schema/proto/`                        | The protobuf message definitions                                  |
-| `schema/generate.py`                   | Generates code and the Elasticsearch mapping from the .proto files |
+| `schema/generate.py`                   | Generates code, the Elasticsearch mapping and dbt tests from the .proto files |
 | `schema/telemetry_schema/`             | Shared code: finding message classes, protobuf to Elasticsearch   |
 | `producer/producer.py`                 | Vehicle simulator, publishes to Kafka                             |
+| `producer/send_invalid.py`             | Publishes a few invalid messages, to see the dbt source tests fail |
 | `consumer/consumer.py`                 | Reads from Kafka, posts batches to Logstash                       |
 | `protobuf-consumer/protobuf_consumer.py` | Reads from Kafka, writes binary protobuf files to `./data/protobuf` |
 | `dbt/`                                 | dbt project (Spark locally) and Databricks Asset Bundle           |
@@ -150,6 +151,7 @@ services need, in `schema/generated/`:
 | `kafka/v1/kafka_record_pb2.py`          | `protoc`                      | protobuf-consumer, file format       |
 | `descriptors/descriptor_set.desc`       | `protoc`                      | Spark's `from_protobuf`, to decode   |
 | `elasticsearch/index_template.json`     | `telemetry_schema/elk.py`     | `elk-setup`, to create the mapping   |
+| `dbt/src/models/sources/raw_vehicle_telemetry.yml` | `telemetry_schema/dbt_tests.py` | dbt, to validate the archived messages (see [Validating the messages](#validating-the-messages)) |
 
 The conversions at runtime don't use any hand-written, per-field code. They
 walk the protobuf *descriptors*, the schema information that `protoc` embeds
@@ -202,6 +204,51 @@ from (
 limit 5;
 ```
 
+### Validating the messages
+
+Types alone don't say much: any `double` is a valid speed. The `.proto` file
+therefore also contains validation rules, written as
+[protovalidate](https://protovalidate.com) annotations, the open-source
+standard for this:
+
+```proto
+double speed_kmh = 8 [
+  (buf.validate.field).double.gte = 0,
+  (buf.validate.field).double.lte = 250
+];
+repeated string dtc_codes = 17 [(buf.validate.field).repeated.items.string.pattern = "^[PCBU][0-9]{4}$"];
+```
+
+(`schema/proto/buf/validate/validate.proto` is protovalidate's definition of
+these options, copied from its repository.)
+
+`schema/generate.py` turns the schema into **dbt source tests**
+(`telemetry_schema/dbt_tests.py` writes
+`dbt/src/models/sources/raw_vehicle_telemetry.yml`). They run against the
+archived Kafka records, before any model is built, and check that every
+message:
+
+- **decodes** as a `vehicle.v1.VehicleTelemetry`;
+- only uses **enum values defined in the schema** (protobuf accepts unknown
+  enum numbers on the wire);
+- follows the **protovalidate rules**: required fields, number ranges,
+  string lengths and patterns, repeated items, timestamps not in the future.
+
+There is one test per field, named after it, e.g.
+`protobuf_valid__vehicle_telemetry__speed_kmh`. When one fails, `dbt build`
+skips the models that depend on the source, so invalid data never reaches
+them. Run only the source tests with
+`docker compose run --rm dbt test --select source:raw`.
+
+What the tests can't see: a message cut off exactly between two fields is
+still a valid (shorter) message, and fields that aren't in the schema are
+ignored by Spark. Rules that can't be translated to SQL (e.g. CEL
+expressions) are listed under `meta.unchecked_rules` in the generated file.
+
+The rules found real bugs in the simulator when they were introduced: a
+leaking tire's pressure went below 0 after about an hour, and a heading of
+359.96° was rounded to 360.0°.
+
 ### Changing the schema
 
 1. Edit the `.proto` file, e.g. add `double ambient_temp_c = 19;`.
@@ -218,6 +265,9 @@ The result:
   from before the change, the field has its default value (0, "", false).
 - The same goes for messages still in Kafka that were produced with the old
   schema.
+- The dbt source tests are regenerated (by the dbt image, or by
+  `python schema/generate.py`), so new rules are checked too. The generated
+  file is committed, so a schema change shows up in the diff of the tests.
 
 To keep old and new messages compatible, only add fields with new numbers.
 Never change the number or type of an existing field, and `reserve` the
@@ -301,7 +351,14 @@ The converters have unit tests: `pip install pytest && python -m pytest schema/t
    field, then find it in Kibana, Kafka UI and Spark
    (`docker compose run --rm dbt show --inline "select ambient_temp_c, count(*) from {{ telemetry_source() }} group by 1"`).
    What happens if you change the type of an existing field instead?
-7. **Break things.** Stop Logstash (`docker compose stop logstash`) and see the
+7. **Send invalid messages.** `python producer/send_invalid.py` publishes a few
+   messages that break the schema in different ways (garbage bytes, an unknown
+   enum value, a speed of 999, bad patterns, missing required fields). Wait a
+   minute for the protobuf consumer to write them to a file, then run
+   `docker compose run --rm dbt build`: the source tests fail, one per kind
+   of problem, and the models are skipped. To start clean again, run
+   `docker compose down -v` and delete `./data`.
+8. **Break things.** Stop Logstash (`docker compose stop logstash`) and see the
    consumer retry without committing. Stop Kafka and see what the producer does.
 
 ## Notes
