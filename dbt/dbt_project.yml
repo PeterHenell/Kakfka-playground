@@ -1,0 +1,31 @@
+name: vehicle_telemetry
+version: "1.0.0"
+config-version: 2
+
+profile: vehicle_telemetry
+
+# Everything dbt-related lives in src/, so the Databricks bundle files
+# (databricks.yml, resources/) can sit next to it.
+model-paths: ["src/models"]
+macro-paths: ["src/macros"]
+test-paths: ["src/tests"]
+analysis-paths: ["src/analyses"]
+seed-paths: ["src/seeds"]
+snapshot-paths: ["src/snapshots"]
+
+clean-targets:
+  - target
+  - dbt_packages
+
+vars:
+  # Where the parquet consumer writes its files. Locally this is the ./data
+  # folder in the repo; the Databricks job overrides it with a Unity Catalog
+  # Volume path (see resources/vehicle_telemetry.job.yml).
+  parquet_path: "{{ env_var('PARQUET_PATH', '../data/parquet/vehicle_telemetry') }}"
+
+models:
+  vehicle_telemetry:
+    staging:
+      +materialized: view
+    marts:
+      +materialized: table

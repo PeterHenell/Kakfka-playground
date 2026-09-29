@@ -1,0 +1,12 @@
+# Profile for local development: dbt runs on DuckDB, an in-process database
+# stored in a single file. dbt looks for profiles.yml in the current
+# directory first, so running dbt from this folder picks this file up.
+#
+# The Databricks job uses dbt_profiles/profiles.yml instead.
+vehicle_telemetry:
+  target: dev
+  outputs:
+    dev:
+      type: duckdb
+      path: "{{ env_var('DUCKDB_PATH', '../data/vehicle_telemetry.duckdb') }}"
+      threads: 4

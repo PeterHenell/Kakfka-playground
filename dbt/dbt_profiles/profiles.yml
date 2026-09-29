@@ -1,0 +1,19 @@
+# Profiles used by the Databricks job (see resources/vehicle_telemetry.job.yml).
+# For local development, dbt uses ../profiles.yml (DuckDB) instead.
+#
+# Databricks provides DBT_HOST and DBT_ACCESS_TOKEN to dbt tasks. The other
+# values are passed in by the job as dbt vars, from the bundle variables in
+# databricks.yml.
+vehicle_telemetry:
+  target: dev
+  outputs:
+    dev: &databricks
+      type: databricks
+      method: http
+      host: "{{ env_var('DBT_HOST') }}"
+      token: "{{ env_var('DBT_ACCESS_TOKEN') }}"
+      http_path: "{{ var('http_path') }}"
+      catalog: "{{ var('catalog') }}"
+      schema: "{{ var('schema') }}"
+      threads: 4
+    prod: *databricks

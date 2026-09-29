@@ -1,0 +1,7 @@
+# The schema that holds both the raw Parquet volume and the dbt models.
+resources:
+  schemas:
+    vehicle_telemetry:
+      catalog_name: ${var.catalog}
+      name: ${var.schema}
+      comment: Vehicle telemetry from the Kafka playground

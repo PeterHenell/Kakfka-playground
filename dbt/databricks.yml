@@ -1,0 +1,42 @@
+# Databricks Asset Bundle (DAB) for the vehicle_telemetry dbt project.
+#
+# Deploys a Databricks job that runs `dbt build` on a SQL warehouse, reading
+# the Parquet files from a Unity Catalog Volume. See README.md in this folder.
+#
+#   databricks bundle validate
+#   databricks bundle deploy               # dev target (default)
+#   databricks bundle run vehicle_telemetry_dbt_job
+bundle:
+  name: vehicle_telemetry
+
+include:
+  - resources/*.yml
+
+variables:
+  catalog:
+    description: Unity Catalog catalog to deploy the schema and volume to.
+    default: main
+  schema:
+    description: Schema for the raw data volume and the dbt models.
+    default: vehicle_telemetry
+  warehouse_id:
+    description: ID of the SQL warehouse dbt runs its queries on.
+    lookup:
+      warehouse: "Serverless Starter Warehouse"
+
+targets:
+  dev:
+    # Development mode prefixes resources with [dev your_name] and names the
+    # schema dev_<your_name>_vehicle_telemetry, so each developer gets their
+    # own copy. Job schedules are paused.
+    mode: development
+    default: true
+    # workspace:
+    #   host: https://<your-workspace>.cloud.databricks.com
+
+  prod:
+    mode: production
+    workspace:
+      # host: https://<your-workspace>.cloud.databricks.com
+      # Production mode requires a fixed path, so there is only one deployed copy.
+      root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/${bundle.target}
