@@ -1,0 +1,54 @@
+version: 2
+
+models:
+  - name: dim_vehicles
+    description: One row per vehicle.
+    columns:
+      - name: vehicle_id
+        data_tests:
+          - unique
+          - not_null
+
+  - name: fct_vehicle_events
+    description: One row per event (harsh braking, overheating, ...) reported by a vehicle.
+    columns:
+      - name: event_id
+        data_tests:
+          - unique
+          - not_null
+      - name: vehicle_id
+        data_tests:
+          - relationships:
+              arguments:
+                to: ref('dim_vehicles')
+                field: vehicle_id
+      - name: event_type
+        data_tests:
+          - accepted_values:
+              arguments:
+                values:
+                  - harsh_braking
+                  - harsh_acceleration
+                  - speeding
+                  - engine_overheating
+                  - low_fuel
+                  - refueled
+                  - low_tire_pressure
+
+  - name: fct_vehicle_daily
+    description: Distance driven and health indicators per vehicle and day.
+    data_tests:
+      - unique_combination_of_columns:
+          arguments:
+            columns: [vehicle_id, event_date]
+    columns:
+      - name: distance_km
+        description: Sum of the distance driven between consecutive readings.
+
+  - name: vehicle_latest_status
+    description: The latest reading of every vehicle.
+    columns:
+      - name: vehicle_id
+        data_tests:
+          - unique
+          - not_null

@@ -44,8 +44,12 @@ class Vehicle:
 
     def __init__(self, index: int):
         self.vehicle_id = f"vehicle-{index:03d}"
-        self.vin = "".join(random.choices("ABCDEFGHJKLMNPRSTUVWXYZ0123456789", k=17))
-        self.vehicle_type = random.choice(VEHICLE_TYPES)
+        # Things that don't change for a vehicle (VIN, type, faults) come from
+        # a random generator seeded with the vehicle number, so vehicle-001 is
+        # the same vehicle every time the producer starts.
+        fixed = random.Random(index)
+        self.vin = "".join(fixed.choices("ABCDEFGHJKLMNPRSTUVWXYZ0123456789", k=17))
+        self.vehicle_type = fixed.choice(VEHICLE_TYPES)
         self.max_speed = 90 if self.vehicle_type in ("truck", "bus") else 130
 
         self.lat = START_LAT + random.uniform(-0.05, 0.05)
@@ -55,13 +59,13 @@ class Vehicle:
         self.target_speed = random.uniform(30, self.max_speed)
         self.engine_temp = random.uniform(20, 40)  # starts cold
         self.fuel_level = random.uniform(40, 100)
-        self.odometer = random.uniform(5_000, 250_000)
+        self.odometer = fixed.uniform(5_000, 250_000)
         self.battery_voltage = 12.6
         self.tire_pressure = {t: random.uniform(220, 240) for t in ("front_left", "front_right", "rear_left", "rear_right")}
         # Some vehicles have a slow leak or a bad cooling system, so there is
         # something interesting to find in Kibana.
-        self.leaking_tire = random.choice([None, None, None, "rear_left"])
-        self.cooling_problem = random.random() < 0.2
+        self.leaking_tire = fixed.choice([None, None, None, "rear_left"])
+        self.cooling_problem = fixed.random() < 0.2
 
     def tick(self, dt: float) -> dict:
         events = []

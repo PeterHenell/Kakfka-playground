@@ -2,16 +2,27 @@
 
 A small, self-contained setup for learning Apache Kafka. A Python producer
 simulates a fleet of vehicles that send telemetry (position, speed, engine
-temperature, fuel level, tire pressure...) to Kafka. A Python consumer reads
-the messages and stores them in an ELK stack (Elasticsearch, Logstash,
-Kibana), where you can search, chart and map them.
+temperature, fuel level, tire pressure...) to Kafka. Two consumers read the
+same stream, each in its own consumer group:
+
+- **consumer** stores the messages in an ELK stack (Elasticsearch, Logstash,
+  Kibana), where you can search, chart and map them in near real time.
+- **parquet-consumer** writes the messages to Parquet files, which a
+  [dbt project](dbt/README.md) turns into analytics tables with DuckDB. The
+  same dbt project can be deployed to Databricks as an Asset Bundle.
 
 ```
+                                                 group elk-writer
 ┌──────────┐    ┌─────────────────────────┐    ┌──────────┐    ┌──────────┐    ┌───────────────┐    ┌────────┐
 │ producer │ -> │ Kafka                   │ -> │ consumer │ -> │ Logstash │ -> │ Elasticsearch │ <- │ Kibana │
 │ (python) │    │ topic vehicle-telemetry │    │ (python) │    │ (HTTP)   │    │               │    │        │
 └──────────┘    │ 3 partitions            │    └──────────┘    └──────────┘    └───────────────┘    └────────┘
                 └─────────────────────────┘
+                             │                   group parquet-writer
+                             │                 ┌──────────────────┐    ┌────────────────┐    ┌─────────────────┐
+                             └───────────────> │ parquet-consumer │ -> │ data/parquet/  │ -> │ dbt + DuckDB    │
+                                               │ (python)         │    │ *.parquet      │    │ (or Databricks) │
+                                               └──────────────────┘    └────────────────┘    └─────────────────┘
 ```
 
 Everything runs in a single Docker Compose project.
@@ -26,7 +37,7 @@ docker compose up -d --build
 ```
 
 The first start takes a minute or two while Elasticsearch and Kibana boot.
-Check progress with `docker compose ps` and `docker compose logs -f producer consumer`.
+Check progress with `docker compose ps` and `docker compose logs -f producer consumer parquet-consumer`.
 
 | Service       | URL                        | What it is                                      |
 |---------------|----------------------------|-------------------------------------------------|
@@ -37,7 +48,8 @@ Check progress with `docker compose ps` and `docker compose logs -f producer con
 | Kafka         | `localhost:9094`           | Bootstrap server for clients on your machine    |
 
 Stop everything with `docker compose down`. Add `-v` to also delete the stored
-Kafka and Elasticsearch data.
+Kafka and Elasticsearch data. The Parquet files and the DuckDB database are
+in `./data`; delete that folder to start over.
 
 ### Looking at the data in Kibana
 
@@ -52,6 +64,20 @@ A data view called **Vehicle telemetry** is created automatically.
 - **Dashboards**: build charts of e.g. average `speed_kmh` or maximum
   `engine_temp_c` per `vehicle_id` over time.
 
+### Processing the Parquet files with dbt
+
+The parquet consumer writes a file to `data/parquet/vehicle_telemetry/event_date=YYYY-MM-DD/`
+every 60 seconds (or every 5000 messages). Once the first file is there, build
+the dbt models on DuckDB:
+
+```bash
+docker compose run --rm dbt build
+docker compose run --rm dbt show --select fct_vehicle_daily
+```
+
+See [dbt/README.md](dbt/README.md) for the models, and for how to deploy the
+project to Databricks as a Databricks Asset Bundle.
+
 ## What's in the repo
 
 | Path                                   | Description                                                       |
@@ -59,6 +85,8 @@ A data view called **Vehicle telemetry** is created automatically.
 | `docker-compose.yml`                   | All services                                                      |
 | `producer/producer.py`                 | Vehicle simulator, publishes to Kafka                             |
 | `consumer/consumer.py`                 | Reads from Kafka, posts batches to Logstash                       |
+| `parquet-consumer/parquet_consumer.py` | Reads from Kafka, writes Parquet files to `./data/parquet`        |
+| `dbt/`                                 | dbt project (DuckDB locally) and Databricks Asset Bundle          |
 | `elk/logstash/pipeline/*.conf`         | Logstash pipeline: HTTP in, Elasticsearch out                     |
 | `elk/setup/setup.sh`                   | Creates the Elasticsearch index template and the Kibana data view |
 
@@ -105,6 +133,9 @@ over time you will see events like `engine_overheating`, `low_tire_pressure`,
 - **Logstash** uses `message_id` as the Elasticsearch document id, so
   messages that are delivered twice overwrite the same document instead of
   creating a duplicate.
+- The **parquet consumer** also commits only after a file is written. A file
+  can't be "overwritten" like a document, so duplicates are removed later, in
+  the dbt staging model.
 
 ## Running the scripts from your machine
 
@@ -118,6 +149,7 @@ pip install -r requirements.txt
 
 python producer/producer.py
 python consumer/consumer.py
+python parquet-consumer/parquet_consumer.py
 ```
 
 Both scripts are configured with environment variables. The docstring at the
@@ -130,7 +162,8 @@ top of each script lists them, for example `NUM_VEHICLES=20 INTERVAL_SECONDS=0.2
    `container_name: consumer` line), or run `python consumer/consumer.py`
    on your machine. Watch the `Assigned partitions` lines in the logs as Kafka
    rebalances the 3 partitions. What happens with 4 consumers?
-2. **Add a second consumer group.** Run
+2. **Consumer groups.** `elk-writer` and `parquet-writer` both read every
+   message, independently. Add a third group by running
    `KAFKA_GROUP_ID=my-group python consumer/consumer.py`. The new group gets
    its own copy of every message, starting from the beginning of the topic.
 3. **Consumer lag.** Stop the consumer (`docker compose stop consumer`), wait a
@@ -139,7 +172,9 @@ top of each script lists them, for example `NUM_VEHICLES=20 INTERVAL_SECONDS=0.2
    docker exec kafka /opt/kafka/bin/kafka-consumer-groups.sh \
      --bootstrap-server localhost:9092 --describe --group elk-writer
    ```
-   Start it again and watch it catch up.
+   Start it again and watch it catch up. Compare with `parquet-writer`: its lag
+   grows for up to a minute and then drops to 0, because it only commits after
+   writing a file.
 4. **Kafka CLI tools.** The broker image comes with the standard tools:
    ```bash
    docker exec kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --describe --topic vehicle-telemetry

@@ -1,0 +1,31 @@
+version: 2
+
+models:
+  - name: stg_vehicle_telemetry
+    description: >
+      Vehicle telemetry read from the Parquet files written by the parquet
+      consumer, flattened and de-duplicated on message_id.
+    columns:
+      - name: message_id
+        description: Unique id the producer gives every message.
+        data_tests:
+          - unique
+          - not_null
+      - name: vehicle_id
+        data_tests:
+          - not_null
+      - name: vehicle_type
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ["car", "van", "truck", "bus"]
+      - name: recorded_at
+        description: When the vehicle took the reading.
+        data_tests:
+          - not_null
+      - name: latitude
+        data_tests:
+          - not_null
+      - name: longitude
+        data_tests:
+          - not_null

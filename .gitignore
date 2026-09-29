@@ -2,3 +2,5 @@ __pycache__/
 *.pyc
 .venv/
 venv/
+# Parquet files and the DuckDB database written by the playground
+data/

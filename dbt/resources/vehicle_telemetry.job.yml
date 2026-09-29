@@ -1,0 +1,34 @@
+resources:
+  jobs:
+    vehicle_telemetry_dbt_job:
+      name: vehicle_telemetry_dbt_job
+
+      trigger:
+        # Rebuild the models every hour. Paused automatically in dev mode.
+        periodic:
+          interval: 1
+          unit: HOURS
+
+      tasks:
+        - task_key: dbt_build
+          environment_key: dbt
+          dbt_task:
+            project_directory: ../
+            # Databricks profiles; ../profiles.yml is only for local DuckDB runs.
+            profiles_directory: dbt_profiles/
+            warehouse_id: ${var.warehouse_id}
+            commands:
+              - >-
+                dbt build --target=${bundle.target} --vars '{
+                "catalog": "${var.catalog}",
+                "schema": "${resources.schemas.vehicle_telemetry.name}",
+                "http_path": "/sql/1.0/warehouses/${var.warehouse_id}",
+                "parquet_path": "/Volumes/${var.catalog}/${resources.schemas.vehicle_telemetry.name}/${resources.volumes.raw.name}/vehicle_telemetry"
+                }'
+
+      environments:
+        - environment_key: dbt
+          spec:
+            environment_version: "5"
+            dependencies:
+              - dbt-databricks>=1.10.0,<2.0.0

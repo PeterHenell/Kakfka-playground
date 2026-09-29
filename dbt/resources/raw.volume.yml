@@ -1,0 +1,9 @@
+# The volume the parquet consumer's files are uploaded to.
+resources:
+  volumes:
+    raw:
+      catalog_name: ${var.catalog}
+      schema_name: ${resources.schemas.vehicle_telemetry.name}
+      name: raw
+      volume_type: MANAGED
+      comment: Parquet files written by the parquet consumer
