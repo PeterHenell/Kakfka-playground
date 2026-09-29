@@ -130,7 +130,8 @@ class Vehicle:
         for tire in self.tire_pressure:
             self.tire_pressure[tire] += random.gauss(0, 0.2)
         if self.leaking_tire:
-            self.tire_pressure[self.leaking_tire] -= 0.05 * dt
+            # Loses pressure until the tire is flat.
+            self.tire_pressure[self.leaking_tire] = max(0.0, self.tire_pressure[self.leaking_tire] - 0.05 * dt)
             if self.tire_pressure[self.leaking_tire] < 180:
                 events.append(pb.LOW_TIRE_PRESSURE)
 
@@ -146,7 +147,8 @@ class Vehicle:
             vin=self.vin,
             vehicle_type=self.vehicle_type,
             position=pb.Position(lat=round(self.lat, 6), lon=round(self.lon, 6)),
-            heading_deg=round(self.heading, 1),
+            # % 360 again: 359.96 would round up to 360.0, which is not a valid heading.
+            heading_deg=round(self.heading, 1) % 360,
             speed_kmh=round(self.speed, 1),
             rpm=round(rpm),
             gear=gear,

@@ -198,7 +198,9 @@ services:
   #   docker compose run --rm dbt build
   #   docker compose run --rm dbt show --select fct_vehicle_daily
   dbt:
-    build: ./dbt
+    build:
+      context: .
+      dockerfile: dbt/Dockerfile
     image: kafka-playground-dbt
     profiles: ["dbt"]
     working_dir: /dbt
@@ -215,7 +217,9 @@ services:
   #   docker compose run --rm spark-sql
   #   spark-sql> select * from vehicle_telemetry.fct_vehicle_daily;
   spark-sql:
-    build: ./dbt
+    build:
+      context: .
+      dockerfile: dbt/Dockerfile
     image: kafka-playground-dbt
     profiles: ["dbt"]
     working_dir: /data/spark

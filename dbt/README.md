@@ -12,22 +12,58 @@ them into tables that are easy to analyse. The same project runs in two places:
 
 Both are Spark SQL, so the models are the same SQL in both places.
 
-## Models
+## Sources and models
 
 ```
-protobuf files ──> stg_vehicle_telemetry ──┬──> dim_vehicles           one row per vehicle
-(date=…/            (view: decoded,        ├──> fct_vehicle_daily      distance and health per vehicle and day
- part-….pb)          flattened, de-dup.)   ├──> fct_vehicle_events     one row per event (harsh_braking, …)
-                                           └──> vehicle_latest_status  latest reading per vehicle
+source raw.vehicle_telemetry_records ──> stg_vehicle_telemetry ──┬──> dim_vehicles           one row per vehicle
+(view over the protobuf files;           (view: decoded,        ├──> fct_vehicle_daily      distance and health per vehicle and day
+ generated schema tests)                  flattened, de-dup.)   ├──> fct_vehicle_events     one row per event (harsh_braking, …)
+                                                                 └──> vehicle_latest_status  latest reading per vehicle
 ```
+
+### Sources and the generated schema tests
+
+The files written by the protobuf consumer are exposed as two views, created
+by `on-run-start` hooks in `dbt_project.yml` (`macros/raw_protobuf_views.sql`):
+
+| Source                           | Rows                                                                          |
+|----------------------------------|-------------------------------------------------------------------------------|
+| `raw.vehicle_telemetry_files`    | one per file: `file_path`, `content` (the bytes)                              |
+| `raw.vehicle_telemetry_records`  | one per Kafka record: the `kafka.v1.KafkaRecord` fields; the message is still serialized in `value` |
+
+They are declared, together with their tests, in
+`src/models/sources/raw_vehicle_telemetry.yml`. **That file is generated** by
+`schema/generate.py` from the `.proto` files; don't edit it. The tests check
+that every message decodes, uses only enum values defined in the schema, and
+follows the protovalidate rules in the `.proto` file (see
+[Validating the messages](../README.md#validating-the-messages)). They use two
+generic tests from `macros/protobuf_tests.sql`:
+
+- `protobuf_decodes`: fails for bytes that aren't a valid message of the
+  given type (`from_protobuf` in PERMISSIVE mode returns NULL for them).
+- `protobuf_field_valid`: fails for messages where the generated SQL
+  condition for a field isn't true. The failing rows show the Kafka
+  coordinates and the invalid value.
+
+Because the models depend on the source, `dbt build` runs these tests first
+and skips the models when one fails. The staging model also skips messages
+that don't decode, so `dbt run` (which doesn't run tests) still works.
+
+The Docker image runs the generator while it's built and copies the result
+into the project before every dbt command (`docker-entrypoint.sh`). Running
+dbt on your machine, regenerate it yourself after a schema change:
+`python schema/generate.py` (in the producer/consumers' virtual environment).
+
+### Models
 
 - `stg_vehicle_telemetry` removes duplicates. Both consumers deliver
   *at-least-once*, so a message can show up in more than one file.
   It also computes the distance driven since each vehicle's previous reading,
   and lower-cases the protobuf enum names (`HARSH_BRAKING` → `harsh_braking`).
-- The raw files are read and decoded by the `telemetry_source()` macro, with
-  Spark's `from_protobuf`: first each file into a `KafkaRecordBatch`, then
-  each record's bytes into the message type in the `message_type` var. It
+- The messages are decoded by the `telemetry_source()` macro, with Spark's
+  `from_protobuf`: the records view has already decoded each file into a
+  `KafkaRecordBatch`, and the macro decodes each record's bytes into the
+  message type in the `message_type` var. It
   decodes with the descriptor set that the consumer writes to
   `_schema/descriptor_set.desc`, which always describes the newest schema.
   Protobuf can decode older messages with a newer schema; fields that didn't
@@ -41,8 +77,8 @@ protobuf files ──> stg_vehicle_telemetry ──┬──> dim_vehicles      
 - The staging model lists the columns it uses. When you add a field to the
   `.proto` file, it is available in `telemetry_source()` right away; add it
   to the staging model to use it downstream.
-- Tests (`dbt build` runs them) check uniqueness, not-null columns, accepted
-  values and relationships. See the `_*.yml` files next to the models.
+- Model tests (`dbt build` runs them) check uniqueness, not-null columns,
+  accepted values and relationships. See the `_*.yml` files next to the models.
 
 ## Running locally with Spark
 
