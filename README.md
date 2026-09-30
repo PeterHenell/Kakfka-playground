@@ -63,8 +63,12 @@ to start over.
 
 ### The control panel
 
-http://localhost:8090 shows, per component, whether it's running, and for
-the topic and each consumer group:
+http://localhost:8090 is the starting point. Its **Tools** section links to
+the other web UIs (JupyterLab, Kibana, Kafka UI, the Spark UI and the
+Elasticsearch API), says what each one is for, and shows whether it's up.
+
+Below that, it shows per component whether it's running, and for the topic
+and each consumer group:
 
 - **Produced**: messages written to the topic (the sum of its end offsets).
 - **Consumed**: messages a consumer group has committed (the sum of its
@@ -349,7 +353,7 @@ python schema/generate.py          # again after every .proto change
 python producer/producer.py
 python consumer/consumer.py
 python protobuf-consumer/protobuf_consumer.py
-python control-panel/app.py        # http://localhost:8090
+TOOLS_CHECK_HOST=localhost python control-panel/app.py   # http://localhost:8090
 ```
 
 The scripts are configured with environment variables. The docstring at the
