@@ -13,6 +13,8 @@ producer and the consumers.
   last HISTORY_MINUTES, for the rates and the lag chart.
 - Pausing writes the desired state to the compacted `playground-control`
   topic; the components follow that topic (see common/kafka_control.py).
+- The Tools section links to the other web UIs of the playground, and shows
+  whether each one is reachable right now.
 
 Configuration (environment variables):
     KAFKA_BOOTSTRAP_SERVERS  default: localhost:9094
@@ -20,13 +22,19 @@ Configuration (environment variables):
     SAMPLE_SECONDS           default: 2
     HISTORY_MINUTES          default: 10
     PORT                     default: 8090
+    TOOLS_CHECK_HOST         default: (each tool's Compose service name).
+                             Set to localhost when running the panel outside
+                             Docker, so the tool checks reach the published ports.
 """
 
 import os
 import sys
 import threading
 import time
+import urllib.error
+import urllib.request
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from confluent_kafka import ConsumerGroupTopicPartitions, Producer, TopicPartition
@@ -55,6 +63,47 @@ COMPONENTS = [
     },
 ]
 COMPONENT_GROUPS = {c["group"]: c["name"] for c in COMPONENTS if c["group"]}
+
+# The other web UIs, with what you'd use each one for. The page builds the
+# link from the host you opened the panel on plus `port` and `path`; the
+# panel checks `service:port` + `check_path` to show whether it's up.
+TOOLS = [
+    {
+        "name": "JupyterLab",
+        "port": 8888, "path": "/lab", "service": "notebook", "check_path": "/api",
+        "uses": "Explore the data with Spark in notebooks: query the dbt tables, decode the raw "
+                "protobuf archive, and make charts. Start with explore_vehicle_telemetry.ipynb.",
+    },
+    {
+        "name": "Kibana",
+        "port": 5601, "path": "/app/discover", "service": "kibana", "check_path": "/api/status",
+        "uses": "Search and chart the telemetry in Elasticsearch: read messages in Discover, "
+                "follow the vehicles on a map, build dashboards.",
+    },
+    {
+        "name": "Kafka UI",
+        "port": 8080, "path": "/", "service": "kafka-ui", "check_path": "/",
+        "uses": "Look inside Kafka: topics and partitions, the decoded protobuf messages and "
+                "their headers, consumer groups and their offsets.",
+    },
+    {
+        "name": "Spark UI",
+        "port": 4040, "path": "/", "service": "notebook", "check_path": "/",
+        "uses": "Watch the jobs of the notebook's Spark session: stages, timings, SQL query plans. "
+                "Only there while a notebook has a Spark session running.",
+        "down_label": "No Spark session",
+    },
+    {
+        "name": "Elasticsearch API",
+        "port": 9200, "path": "/_cat/indices?v", "service": "elasticsearch", "check_path": "/",
+        "uses": "Query Elasticsearch over HTTP: list the daily indices, check the mapping "
+                "generated from the schema, run searches.",
+    },
+]
+TOOLS_CHECK_HOST = os.getenv("TOOLS_CHECK_HOST")
+TOOLS_CACHE_SECONDS = 10
+tools_lock = threading.Lock()
+tools_cache: dict = {"t": 0.0, "status": {}}
 
 app = Flask(__name__, static_folder="static")
 admin = AdminClient({"bootstrap.servers": BOOTSTRAP_SERVERS})
@@ -210,6 +259,37 @@ def overview():
                 for s in snapshots
             ],
         }
+    )
+
+
+def tool_is_up(tool: dict) -> bool:
+    url = f"http://{TOOLS_CHECK_HOST or tool['service']}:{tool['port']}{tool['check_path']}"
+    try:
+        with urllib.request.urlopen(url, timeout=2) as response:
+            return response.status < 500
+    except urllib.error.HTTPError as e:
+        return e.code < 500  # it answered, e.g. with a redirect or 401
+    except Exception:
+        return False
+
+
+@app.get("/api/tools")
+def tools():
+    with tools_lock:
+        if time.time() - tools_cache["t"] > TOOLS_CACHE_SECONDS:
+            with ThreadPoolExecutor(len(TOOLS)) as pool:
+                results = pool.map(tool_is_up, TOOLS)
+            tools_cache["status"] = {tool["name"]: up for tool, up in zip(TOOLS, results)}
+            tools_cache["t"] = time.time()
+        status = dict(tools_cache["status"])
+    return jsonify(
+        [
+            {
+                "name": t["name"], "port": t["port"], "path": t["path"], "uses": t["uses"],
+                "up": status.get(t["name"], False), "down_label": t.get("down_label", "Not reachable"),
+            }
+            for t in TOOLS
+        ]
     )
 
 

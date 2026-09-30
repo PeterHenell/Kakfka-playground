@@ -100,6 +100,18 @@
   .banner { padding: 10px 14px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-1); }
   .banner[hidden] { display: none; }
 
+  /* Tools */
+  .section-title { font-size: 15px; font-weight: 600; margin: 0 0 8px; }
+  .tools { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; }
+  .tool { display: grid; gap: 6px; align-content: start; padding: 14px 16px; }
+  .tool-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 2px 8px; }
+  .tool a { color: var(--text-primary); font-weight: 600; text-decoration: none; }
+  .tool a:hover, .tool a:focus-visible { text-decoration: underline; }
+  .tool a:focus-visible { outline: 2px solid var(--series-1); outline-offset: 2px; border-radius: 2px; }
+  .tool .address { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; color: var(--text-muted); }
+  .tool .uses { margin: 0; color: var(--text-secondary); overflow-wrap: anywhere; }
+  .tool .status { font-size: 13px; font-weight: 500; color: var(--text-secondary); }
+
   /* Component cards */
   .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
   .component { display: grid; gap: 12px; align-content: start; }
@@ -171,6 +183,11 @@
     </header>
 
     <div class="banner" id="banner" role="status" hidden></div>
+
+    <section aria-labelledby="tools-title">
+      <h2 class="section-title" id="tools-title">Tools</h2>
+      <div class="tools" id="tools"></div>
+    </section>
 
     <section class="cards" id="cards" aria-label="Components"></section>
 
@@ -249,6 +266,11 @@ function statusIcon(kind) {
   if (kind === "running") {
     icon.append(svg("circle", { cx: 7, cy: 7, r: 6, fill: "var(--status-good)" }));
     icon.append(svg("path", { d: "M5.3 4.2 L10 7 L5.3 9.8 Z", fill: "#ffffff" }));
+  } else if (kind === "up") {
+    icon.append(svg("circle", { cx: 7, cy: 7, r: 6, fill: "var(--status-good)" }));
+    icon.append(svg("path", { d: "M4.2 7.2 L6.2 9.2 L9.9 5", fill: "none", stroke: "#ffffff", "stroke-width": 1.6, "stroke-linecap": "round", "stroke-linejoin": "round" }));
+  } else if (kind === "idle") {
+    icon.append(svg("circle", { cx: 7, cy: 7, r: 5.25, fill: "none", stroke: "var(--text-muted)", "stroke-width": 1.5 }));
   } else if (kind === "paused") {
     icon.append(svg("circle", { cx: 7, cy: 7, r: 6, fill: "var(--status-warning)" }));
     icon.append(svg("rect", { x: 4.5, y: 4, width: 1.8, height: 6, rx: 0.5, fill: "#0b0b0b" }));
@@ -507,8 +529,34 @@ async function refresh() {
   }
 }
 
+// ---- Tools --------------------------------------------------------------
+async function refreshTools() {
+  let tools;
+  try {
+    tools = await (await fetch("/api/tools", { cache: "no-store" })).json();
+  } catch (e) {
+    return;
+  }
+  const list = $("tools");
+  list.replaceChildren();
+  for (const tool of tools) {
+    // Link to the host this page was opened on, so it also works from another machine.
+    const url = `${location.protocol}//${location.hostname}:${tool.port}${tool.path}`;
+    const link = el("a", { href: url, target: "_blank", rel: "noopener" }, tool.name);
+    const idle = !tool.up && tool.down_label === "No Spark session";
+    const status = el("span", { class: "status" },
+      statusIcon(tool.up ? "up" : idle ? "idle" : "warning"), tool.up ? "Up" : tool.down_label);
+    list.append(el("article", { class: "card tool" },
+      el("div", { class: "tool-head" }, link, status),
+      el("div", { class: "address" }, `${location.hostname}:${tool.port}`),
+      el("p", { class: "uses" }, tool.uses)));
+  }
+}
+
 refresh();
 setInterval(refresh, REFRESH_MS);
+refreshTools();
+setInterval(refreshTools, 10000);
 </script>
 </body>
 </html>
