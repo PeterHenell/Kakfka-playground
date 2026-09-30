@@ -9,6 +9,7 @@
 #
 # Start everything:   docker compose up -d --build
 # Kibana:             http://localhost:5601
+# Control panel:      http://localhost:8090
 # Kafka UI:           http://localhost:8080
 # Elasticsearch:      http://localhost:9200
 # Kafka (from host):  localhost:9094
@@ -64,6 +65,23 @@ services:
     depends_on:
       kafka:
         condition: service_healthy
+
+  # Pause/resume the producer and consumers, and see produced / consumed /
+  # not consumed messages per consumer group.
+  control-panel:
+    build:
+      context: .
+      dockerfile: control-panel/Dockerfile
+    container_name: control-panel
+    ports:
+      - "8090:8090"
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_TOPIC: vehicle-telemetry
+    depends_on:
+      kafka:
+        condition: service_healthy
+    restart: unless-stopped
 
   # ------------------------------------------------------------ ELK stack ---
   elasticsearch:
