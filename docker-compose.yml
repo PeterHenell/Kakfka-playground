@@ -262,6 +262,9 @@ services:
       context: .
       dockerfile: dbt/Dockerfile
     image: kafka-playground-dbt
+    # Rebuild on every `docker compose run`: `docker compose up --build` skips
+    # services in a profile, so the image would otherwise go stale.
+    pull_policy: build
     profiles: ["dbt"]
     working_dir: /dbt
     environment:
@@ -283,6 +286,9 @@ services:
       context: .
       dockerfile: dbt/Dockerfile
     image: kafka-playground-dbt
+    # Rebuild on every `docker compose run`: `docker compose up --build` skips
+    # services in a profile, so the image would otherwise go stale.
+    pull_policy: build
     profiles: ["dbt"]
     working_dir: /data/spark
     # Settings come from spark/spark-defaults.conf (SPARK_CONF_DIR).
