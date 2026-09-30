@@ -135,6 +135,25 @@ dbt build
 
 `profiles.yml` in this folder configures the local Spark session.
 
+### Troubleshooting
+
+**The notebook says `SCHEMA_NOT_FOUND` for `vehicle_telemetry`, but dbt and
+`spark-sql` work.** dbt and `spark-sql` are probably still running an image
+from before the shared catalog, which keeps its own Derby catalog in
+`./data/spark/metastore_db`: the tables exist there, but not in the shared
+catalog the notebook reads. `docker compose up --build` doesn't rebuild them,
+because they're in the `dbt` profile. Their services now set
+`pull_policy: build`, so `docker compose run` rebuilds the image each time
+(quick, thanks to the build cache). If you still have an old image, rebuild
+it once with `docker compose build dbt`, then run `docker compose run --rm dbt build`.
+
+**`LOCATION_ALREADY_EXISTS` when dbt creates a table.** The table's folder
+exists in `./data/spark/warehouse` but the catalog doesn't know the table,
+e.g. data from before the shared catalog, or `./data/metastore-db` deleted
+on its own. The tables are rebuilt from the protobuf archive, so it's safe
+to delete the folders: `rm -rf ./data/spark/warehouse ./data/spark/metastore_db`.
+Then run `docker compose run --rm dbt build` again.
+
 ## Deploying to Databricks as an Asset Bundle
 
 Files involved:
