@@ -49,6 +49,7 @@ Check progress with `docker compose ps` and `docker compose logs -f producer con
 | Service       | URL                        | What it is                                      |
 |---------------|----------------------------|-------------------------------------------------|
 | Control panel | http://localhost:8090      | Pause/resume components, produced/consumed/lag  |
+| JupyterLab    | http://localhost:8888      | Spark notebooks on the dbt tables and raw data  |
 | Kibana        | http://localhost:5601      | Explore the stored telemetry                    |
 | Kafka UI      | http://localhost:8080      | Topics, decoded messages, consumer groups       |
 | Elasticsearch | http://localhost:9200      | REST API for the stored data                    |
@@ -56,8 +57,9 @@ Check progress with `docker compose ps` and `docker compose logs -f producer con
 | Kafka         | `localhost:9094`           | Bootstrap server for clients on your machine    |
 
 Stop everything with `docker compose down`. Add `-v` to also delete the stored
-Kafka and Elasticsearch data. The protobuf files and the Spark tables are in
-`./data`; delete that folder to start over.
+Kafka and Elasticsearch data. The protobuf files, the Spark tables and their
+catalog (the `metastore-db` Postgres data) are in `./data`; delete that folder
+to start over.
 
 ### The control panel
 
@@ -110,6 +112,20 @@ docker compose run --rm dbt show --select fct_vehicle_daily
 See [dbt/README.md](dbt/README.md) for the models, and for how to deploy the
 project to Databricks as a Databricks Asset Bundle.
 
+### Exploring with Spark in Jupyter
+
+JupyterLab runs at http://localhost:8888 (no password; the port is only
+published on 127.0.0.1). Open `explore_vehicle_telemetry.ipynb`: it starts a
+Spark session, queries the dbt tables, charts distance and engine
+temperature, and decodes the raw protobuf archive with `from_protobuf`. The
+session's Spark UI is at http://localhost:4040. New notebooks you create are
+saved in `./notebooks`.
+
+The notebook, dbt and the `spark-sql` shell can all run at the same time.
+They share one table catalog, a Hive metastore kept in the `metastore-db`
+Postgres container (`spark/spark-defaults.conf`). Spark's default, an
+embedded Derby database, can only be opened by one process at a time.
+
 ## What's in the repo
 
 | Path                                   | Description                                                       |
@@ -121,6 +137,9 @@ project to Databricks as a Databricks Asset Bundle.
 | `producer/producer.py`                 | Vehicle simulator, publishes to Kafka                             |
 | `producer/send_invalid.py`             | Publishes a few invalid messages, to see the dbt source tests fail |
 | `control-panel/`                       | The control panel: a Flask app (`app.py`) and one HTML page       |
+| `notebooks/`                           | Jupyter notebooks (Spark), served by the `notebook` service        |
+| `spark/spark-defaults.conf`            | Spark settings shared by dbt, spark-sql and the notebooks         |
+| `metastore/init/`                      | Hive metastore schema for the `metastore-db` Postgres              |
 | `common/kafka_control.py`              | Pause/resume through the `playground-control` topic              |
 | `consumer/consumer.py`                 | Reads from Kafka, posts batches to Logstash                       |
 | `protobuf-consumer/protobuf_consumer.py` | Reads from Kafka, writes binary protobuf files to `./data/protobuf` |

@@ -8,3 +8,4 @@ data/
 schema/generated/
 # Spark's embedded metastore log
 derby.log
+.ipynb_checkpoints/

@@ -10,6 +10,7 @@
 # Start everything:   docker compose up -d --build
 # Kibana:             http://localhost:5601
 # Control panel:      http://localhost:8090
+# Jupyter notebooks:  http://localhost:8888
 # Kafka UI:           http://localhost:8080
 # Elasticsearch:      http://localhost:9200
 # Kafka (from host):  localhost:9094
@@ -211,6 +212,47 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  # The Hive metastore database: the table catalog shared by every Spark
+  # process (dbt, spark-sql, notebooks), so they can run at the same time.
+  # Initialised with Hive's schema scripts on first start. The data lives in
+  # ./data/metastore-db, next to the table files in ./data/spark/warehouse, so
+  # deleting ./data resets both together.
+  metastore-db:
+    image: postgres:16-alpine
+    container_name: metastore-db
+    environment:
+      POSTGRES_DB: metastore
+      POSTGRES_USER: hive
+      POSTGRES_PASSWORD: hive
+    volumes:
+      - ./metastore/init:/docker-entrypoint-initdb.d:ro
+      - ./data/metastore-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hive -d metastore"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  # JupyterLab with PySpark, on the same table catalog as dbt: explore the
+  # dbt tables and the raw protobuf files while dbt runs.
+  # Only published on 127.0.0.1, as it has no password.
+  notebook:
+    build:
+      context: .
+      dockerfile: notebook/Dockerfile
+    container_name: notebook
+    ports:
+      - "127.0.0.1:8888:8888"
+      - "127.0.0.1:4040:4040"   # Spark UI of the notebook's Spark session
+    volumes:
+      - ./notebooks:/notebooks
+      - ./data:/data
+    depends_on:
+      metastore-db:
+        condition: service_healthy
+    restart: unless-stopped
+
   # dbt on Apache Spark (in-process PySpark), run on demand (it is not
   # started by `docker compose up`):
   #   docker compose run --rm dbt build
@@ -224,12 +266,14 @@ services:
     working_dir: /dbt
     environment:
       RAW_DATA_PATH: /data/protobuf/vehicle_telemetry
-      SPARK_DATA_DIR: /data/spark
       # Cache for the spark-protobuf jar, so it is only downloaded once.
       SPARK_IVY_DIR: /data/spark/ivy
     volumes:
       - ./dbt:/dbt
       - ./data:/data
+    depends_on:
+      metastore-db:
+        condition: service_healthy
 
   # Interactive Spark SQL shell on the tables dbt built:
   #   docker compose run --rm spark-sql
@@ -241,20 +285,13 @@ services:
     image: kafka-playground-dbt
     profiles: ["dbt"]
     working_dir: /data/spark
-    entrypoint:
-      - spark-sql
-      - --packages
-      - org.apache.spark:spark-protobuf_2.13:4.2.0
-      - --conf
-      - spark.jars.ivy=/data/spark/ivy
-      - --conf
-      - spark.sql.warehouse.dir=/data/spark/warehouse
-      - --conf
-      - spark.hadoop.javax.jdo.option.ConnectionURL=jdbc:derby:;databaseName=/data/spark/metastore_db;create=true
-      - --conf
-      - spark.ui.enabled=false
+    # Settings come from spark/spark-defaults.conf (SPARK_CONF_DIR).
+    entrypoint: ["spark-sql", "--conf", "spark.ui.enabled=false"]
     volumes:
       - ./data:/data
+    depends_on:
+      metastore-db:
+        condition: service_healthy
 
 volumes:
   kafka-data:

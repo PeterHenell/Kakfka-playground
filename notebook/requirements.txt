@@ -1,0 +1,8 @@
+# Jupyter with PySpark. The PySpark version must match the one dbt uses
+# (dbt/requirements.txt) and the spark-protobuf version in
+# spark/spark-defaults.conf.
+pyspark==4.2.0
+jupyterlab==4.6.4
+pandas==2.3.3
+pyarrow==25.0.1
+matplotlib==3.11.2
