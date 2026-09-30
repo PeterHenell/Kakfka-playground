@@ -11,6 +11,6 @@ COPY schema/ schema/
 RUN python schema/generate.py
 # Pause/resume from the control panel.
 COPY common/ common/
-COPY producer/producer.py producer/producer.py
+COPY producer/producer.py producer/send_invalid.py producer/
 # -u: unbuffered output so prints show up in `docker compose logs` immediately
 CMD ["python", "-u", "producer/producer.py"]

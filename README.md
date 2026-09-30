@@ -40,11 +40,25 @@ Requirements: Docker with Docker Compose, and about 3 GB of free memory for
 the containers.
 
 ```bash
-docker compose up -d --build
+make up          # or: docker compose up -d --build
 ```
 
 The first start takes a minute or two while Elasticsearch and Kibana boot.
-Check progress with `docker compose ps` and `docker compose logs -f producer consumer protobuf-consumer`.
+Check progress with `make ps` and `make logs`. Then open the control panel at
+http://localhost:8090, which links to all the other tools.
+
+The Makefile has shortcuts for the common tasks (run `make` to list them):
+
+| Command         | What it does                                                              |
+|-----------------|---------------------------------------------------------------------------|
+| `make up`       | Build and start everything                                                |
+| `make down`     | Stop everything; the data is kept                                         |
+| `make ps`       | Show the status of the services                                           |
+| `make logs`     | Follow the logs of the producer and the consumers                         |
+| `make dbt`      | Run `dbt build` on Spark; other commands with `make dbt ARGS="test"`      |
+| `make spark`    | Open a Spark SQL shell on the dbt tables                                  |
+| `make invalid`  | Publish a few invalid messages, to see the dbt source tests fail          |
+| `make clean`    | Stop everything and delete **all** data (Kafka, Elasticsearch, `./data`)  |
 
 | Service       | URL                        | What it is                                      |
 |---------------|----------------------------|-------------------------------------------------|
