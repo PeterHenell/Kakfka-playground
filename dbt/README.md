@@ -5,8 +5,9 @@ them into tables that are easy to analyse. The same project runs in two places:
 
 - **Locally on Apache Spark**: dbt starts Spark inside its own process
   (dbt-spark's `session` method, i.e. PySpark). Tables are stored as Parquet
-  files in `../data/spark/warehouse`, and the table catalog in
-  `../data/spark/metastore_db`.
+  files in `../data/spark/warehouse`, and the table catalog (the Hive
+  metastore) in the `metastore-db` Postgres container, shared with the
+  `spark-sql` shell and the Jupyter notebooks.
 - **On Databricks**: deployed as a Databricks Asset Bundle (DAB), running on
   a SQL warehouse and reading the protobuf files from a Unity Catalog Volume.
 
@@ -95,7 +96,8 @@ after starting the stack before the first build. Run `build` again to pick up
 new data. Starting Spark takes a few seconds, so a build takes about half a
 minute.
 
-To explore the tables with SQL, open a Spark SQL shell:
+To explore the tables, open JupyterLab at http://localhost:8888 (see
+`notebooks/explore_vehicle_telemetry.ipynb`), or a Spark SQL shell:
 
 ```bash
 docker compose run --rm spark-sql
@@ -103,12 +105,26 @@ spark-sql (default)> show tables in vehicle_telemetry;
 spark-sql (default)> select * from vehicle_telemetry.vehicle_latest_status;
 ```
 
-The table catalog is an embedded (Derby) database that only one process can
-open at a time, so don't run dbt and the shell at the same time.
+Both can run while dbt is running. Every Spark process (dbt, the shell, each
+notebook) keeps its table catalog in the `metastore-db` Postgres container:
+
+- `spark/spark-defaults.conf` holds the shared Spark settings. The images
+  copy it to `/opt/spark-conf` and point `SPARK_CONF_DIR` at it.
+- `metastore/init/*.sql` is Hive's metastore schema for Postgres, created
+  when the container first starts. (Letting Spark create it lazily deadlocks.)
+- The Hive metastore client looks for the Postgres JDBC driver on Spark's
+  own classpath, so the images download it into PySpark's `jars` folder
+  (`spark/install-postgres-driver.py`).
+
+By default Spark would keep the catalog in an embedded Derby database, which
+only one process can open at a time.
 
 Or run dbt on your machine, from this folder. That needs Java 17 or 21, and a
 separate virtual environment from the producer and consumers, because dbt
-and the protobuf tools need different versions of the protobuf library:
+and the protobuf tools need different versions of the protobuf library.
+Without `SPARK_CONF_DIR`, Spark uses its defaults there: tables in
+`./spark-warehouse` and the Derby catalog in `./metastore_db`, so one Spark
+process at a time.
 
 ```bash
 python -m venv .venv-dbt

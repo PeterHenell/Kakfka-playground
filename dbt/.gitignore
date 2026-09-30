@@ -3,3 +3,5 @@ dbt_packages/
 logs/
 .databricks/
 .user.yml
+metastore_db/
+spark-warehouse/

@@ -30,7 +30,12 @@
     select
       file_path,
       explode(
-        from_protobuf(content, 'kafka.v1.KafkaRecordBatch', '{{ var("descriptor_path") }}', map('mode', 'PERMISSIVE')).records
+        -- emit.default.values: proto3 doesn't store zero values, so without
+        -- it partition 0 and offset 0 would come back as NULL.
+        from_protobuf(
+          content, 'kafka.v1.KafkaRecordBatch', '{{ var("descriptor_path") }}',
+          map('mode', 'PERMISSIVE', 'emit.default.values', 'true')
+        ).records
       ) as record
     from {{ target.schema }}.raw_{{ name }}_files
   ) as batches
