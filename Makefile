@@ -10,12 +10,12 @@ UP_FLAGS ?= --build
 ARGS ?= build
 
 .DEFAULT_GOAL := help
-.PHONY: help up down restart ps logs dbt spark notebook panel invalid clean
+.PHONY: help up down restart ps logs dbt spark superset panel invalid clean
 
 help: ## List the targets
 	@grep -hE '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "} {printf "  make %-10s %s\n", $$1, $$2}'
 
-up: ## Build and start everything (Kafka, ELK, consumers, control panel, Jupyter)
+up: ## Build and start everything (Kafka, ELK, consumers, control panel, Superset)
 	$(COMPOSE) up -d $(UP_FLAGS)
 	@echo
 	@echo "Control panel (links to all other tools): http://localhost:8090"
@@ -37,8 +37,8 @@ dbt: ## Run dbt on Spark: `dbt build` by default, or make dbt ARGS="..."
 spark: ## Open a Spark SQL shell on the dbt tables
 	$(COMPOSE) run --rm spark-sql
 
-notebook: ## Show where JupyterLab runs
-	@echo "JupyterLab: http://localhost:8888 (start with explore_vehicle_telemetry.ipynb)"
+superset: ## Show where Superset runs and how to log in
+	@echo "Superset: http://localhost:8088 (log in with admin / admin; SQL Lab: http://localhost:8088/sqllab/)"
 
 panel: ## Show where the control panel runs
 	@echo "Control panel: http://localhost:8090"
@@ -46,7 +46,7 @@ panel: ## Show where the control panel runs
 invalid: ## Publish a few invalid messages, to see the dbt source tests fail
 	$(COMPOSE) run --rm --no-deps producer python -u producer/send_invalid.py
 
-clean: ## Stop everything and delete ALL data: Kafka, Elasticsearch, ./data
+clean: ## Stop everything and delete ALL data: Kafka, Elasticsearch, Superset, ./data
 	$(COMPOSE) --profile dbt down -v --remove-orphans
 	@# ./data is written by the containers (as root), so delete it from a container too.
 	docker run --rm -v "$(CURDIR):/work" postgres:16-alpine rm -rf /work/data

@@ -10,8 +10,9 @@ same stream, each in its own consumer group:
   Kibana), where you can search, chart and map them in near real time.
 - **protobuf-consumer** archives the messages, still in binary protobuf, to
   files. A [dbt project](dbt/README.md) decodes them with Apache Spark and
-  turns them into analytics tables. The same dbt project can be deployed to
-  Databricks as an Asset Bundle.
+  turns them into analytics tables, which you can browse, query and chart in
+  [Apache Superset](https://superset.apache.org/). The same dbt project can
+  be deployed to Databricks as an Asset Bundle.
 
 The message format is defined once, in a `.proto` file. Everything else
 (the Python classes, the conversion to Elasticsearch documents, the
@@ -36,7 +37,7 @@ Everything runs in a single Docker Compose project.
 
 ## Getting started
 
-Requirements: Docker with Docker Compose, and about 3 GB of free memory for
+Requirements: Docker with Docker Compose, and about 5 GB of free memory for
 the containers.
 
 ```bash
@@ -57,13 +58,16 @@ The Makefile has shortcuts for the common tasks (run `make` to list them):
 | `make logs`     | Follow the logs of the producer and the consumers                         |
 | `make dbt`      | Run `dbt build` on Spark; other commands with `make dbt ARGS="test"`      |
 | `make spark`    | Open a Spark SQL shell on the dbt tables                                  |
+| `make superset` | Show where Superset runs and how to log in                                |
 | `make invalid`  | Publish a few invalid messages, to see the dbt source tests fail          |
-| `make clean`    | Stop everything and delete **all** data (Kafka, Elasticsearch, `./data`)  |
+| `make clean`    | Stop everything and delete **all** data (Kafka, Elasticsearch, Superset, `./data`) |
 
 | Service       | URL                        | What it is                                      |
 |---------------|----------------------------|-------------------------------------------------|
 | Control panel | http://localhost:8090      | Pause/resume components, produced/consumed/lag  |
-| JupyterLab    | http://localhost:8888      | Spark notebooks on the dbt tables and raw data  |
+| Superset      | http://localhost:8088      | Table catalog, SQL on Spark, charts (admin / admin) |
+| Spark UI      | http://localhost:4040      | Jobs and queries of the Spark Thrift Server     |
+| Spark Thrift Server | `localhost:10000`    | JDBC/ODBC (HiveServer2) access to the Spark tables |
 | Kibana        | http://localhost:5601      | Explore the stored telemetry                    |
 | Kafka UI      | http://localhost:8080      | Topics, decoded messages, consumer groups       |
 | Elasticsearch | http://localhost:9200      | REST API for the stored data                    |
@@ -71,14 +75,15 @@ The Makefile has shortcuts for the common tasks (run `make` to list them):
 | Kafka         | `localhost:9094`           | Bootstrap server for clients on your machine    |
 
 Stop everything with `docker compose down`. Add `-v` to also delete the stored
-Kafka and Elasticsearch data. The protobuf files, the Spark tables and their
+Kafka and Elasticsearch data and Superset's own database (charts, dashboards,
+saved queries). The protobuf files, the Spark tables and their
 catalog (the `metastore-db` Postgres data) are in `./data`; delete that folder
 to start over.
 
 ### The control panel
 
 http://localhost:8090 is the starting point. Its **Tools** section links to
-the other web UIs (JupyterLab, Kibana, Kafka UI, the Spark UI and the
+the other web UIs (Superset, Kibana, Kafka UI, the Spark UI and the
 Elasticsearch API), says what each one is for, and shows whether it's up.
 
 Below that, it shows per component whether it's running, and for the topic
@@ -130,19 +135,35 @@ docker compose run --rm dbt show --select fct_vehicle_daily
 See [dbt/README.md](dbt/README.md) for the models, and for how to deploy the
 project to Databricks as a Databricks Asset Bundle.
 
-### Exploring with Spark in Jupyter
+### Exploring the tables in Superset
 
-JupyterLab runs at http://localhost:8888 (no password; the port is only
-published on 127.0.0.1). Open `explore_vehicle_telemetry.ipynb`: it starts a
-Spark session, queries the dbt tables, charts distance and engine
-temperature, and decodes the raw protobuf archive with `from_protobuf`. The
-session's Spark UI is at http://localhost:4040. New notebooks you create are
-saved in `./notebooks`.
+[Apache Superset](https://superset.apache.org/) runs at http://localhost:8088
+(log in with **admin** / **admin**; the port is only published on
+127.0.0.1). It comes with a database connection called
+**Spark (vehicle telemetry)**.
 
-The notebook, dbt and the `spark-sql` shell can all run at the same time.
-They share one table catalog, a Hive metastore kept in the `metastore-db`
-Postgres container (`spark/spark-defaults.conf`). Spark's default, an
-embedded Derby database, can only be opened by one process at a time.
+- **SQL Lab** (menu → SQL → SQL Lab, http://localhost:8088/sqllab/): the
+  left side is a catalog browser. Pick the `vehicle_telemetry` schema to see
+  its tables and views and their columns, and write queries on the right,
+  e.g. `select * from vehicle_telemetry.fct_vehicle_daily`. The raw sources
+  are there too: `stg_vehicle_telemetry` is a view that decodes the protobuf
+  archive with `from_protobuf` on every query.
+- **Charts and dashboards**: turn a table (menu → Datasets → + Dataset) or a
+  SQL Lab query (*Save dataset*) into a dataset, then chart it, e.g. distance
+  per vehicle and day from `fct_vehicle_daily`.
+
+Superset doesn't run queries itself. It sends them to the **Spark Thrift
+Server** (`spark-thrift-server`), a long-running Spark application that
+answers SQL over JDBC/ODBC (the HiveServer2 protocol). Its Spark UI, at
+http://localhost:4040, shows the jobs behind each query. Other SQL clients,
+such as DBeaver or beeline, can connect to it too:
+`jdbc:hive2://localhost:10000/vehicle_telemetry` (no password).
+
+Superset, dbt and the `spark-sql` shell can all run at the same time. They
+share one table catalog, a Hive metastore kept in the `metastore-db` Postgres
+container (`spark/spark-defaults.conf`). Spark's default, an embedded Derby
+database, can only be opened by one process at a time. Superset keeps its
+own settings, charts and dashboards in the `superset-home` volume.
 
 ## What's in the repo
 
@@ -155,8 +176,8 @@ embedded Derby database, can only be opened by one process at a time.
 | `producer/producer.py`                 | Vehicle simulator, publishes to Kafka                             |
 | `producer/send_invalid.py`             | Publishes a few invalid messages, to see the dbt source tests fail |
 | `control-panel/`                       | The control panel: a Flask app (`app.py`) and one HTML page       |
-| `notebooks/`                           | Jupyter notebooks (Spark), served by the `notebook` service        |
-| `spark/spark-defaults.conf`            | Spark settings shared by dbt, spark-sql and the notebooks         |
+| `superset/`                            | The Superset image: config, and the start script that adds the Spark connection |
+| `spark/spark-defaults.conf`            | Spark settings shared by dbt, spark-sql and the Thrift Server     |
 | `metastore/init/`                      | Hive metastore schema for the `metastore-db` Postgres              |
 | `common/kafka_control.py`              | Pause/resume through the `playground-control` topic              |
 | `consumer/consumer.py`                 | Reads from Kafka, posts batches to Logstash                       |
