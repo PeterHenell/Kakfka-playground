@@ -24,6 +24,7 @@ Configuration (environment variables):
     BATCH_SIZE               default: 100
     MESSAGE_TYPE             default: vehicle.v1.VehicleTelemetry (used when a
                              message has no message-type header)
+    CONTROL_NAME             default: consumer (its name in the control panel)
 
 Before running this outside Docker, generate the protobuf code:
 
@@ -41,6 +42,8 @@ from confluent_kafka import Consumer, KafkaError
 from google.protobuf.message import DecodeError
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "schema"))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "common"))
+from kafka_control import ConsumerPauser, ControlState  # noqa: E402
 from telemetry_schema import elk, message_class  # noqa: E402
 
 BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9094")
@@ -49,6 +52,7 @@ GROUP_ID = os.getenv("KAFKA_GROUP_ID", "elk-writer")
 LOGSTASH_URL = os.getenv("LOGSTASH_URL", "http://localhost:8081")
 BATCH_SIZE = int(os.getenv("BATCH_SIZE", "100"))
 MESSAGE_TYPE = os.getenv("MESSAGE_TYPE", "vehicle.v1.VehicleTelemetry")
+CONTROL_NAME = os.getenv("CONTROL_NAME", "consumer")
 
 
 def decode(msg):
@@ -105,10 +109,14 @@ def main() -> None:
     signal.signal(signal.SIGINT, stop)
     signal.signal(signal.SIGTERM, stop)
 
+    # Pause/resume from the control panel (see common/kafka_control.py).
+    pauser = ConsumerPauser(ControlState(BOOTSTRAP_SERVERS, CONTROL_NAME))
+
     print(f"Consuming '{TOPIC}' from {BOOTSTRAP_SERVERS} as group '{GROUP_ID}', writing to {LOGSTASH_URL}")
     total = 0
     try:
         while running:
+            pauser.apply(consumer)
             messages = consumer.consume(num_messages=BATCH_SIZE, timeout=1.0)
             if not messages:
                 continue

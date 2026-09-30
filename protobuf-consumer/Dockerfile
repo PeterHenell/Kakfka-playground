@@ -9,6 +9,8 @@ RUN pip install --no-cache-dir -r schema/requirements.txt -r protobuf-consumer/r
 # the image (docker compose up -d --build) picks up schema changes.
 COPY schema/ schema/
 RUN python schema/generate.py
+# Pause/resume from the control panel.
+COPY common/ common/
 COPY protobuf-consumer/protobuf_consumer.py protobuf-consumer/protobuf_consumer.py
 # -u: unbuffered output so prints show up in `docker compose logs` immediately
 CMD ["python", "-u", "protobuf-consumer/protobuf_consumer.py"]

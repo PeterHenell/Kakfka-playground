@@ -35,6 +35,7 @@ Configuration (environment variables):
     FLUSH_INTERVAL_SECONDS   default: 60
     MESSAGE_TYPE             default: vehicle.v1.VehicleTelemetry (used when a
                              message has no message-type header)
+    CONTROL_NAME             default: protobuf-consumer (its name in the control panel)
 
 Before running this outside Docker, generate the protobuf code:
 
@@ -54,6 +55,8 @@ from pathlib import Path
 from confluent_kafka import TIMESTAMP_NOT_AVAILABLE, Consumer, KafkaError
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "schema"))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "common"))
+from kafka_control import ConsumerPauser, ControlState  # noqa: E402
 from telemetry_schema.registry import DESCRIPTOR_SET, load_generated_modules  # noqa: E402
 
 load_generated_modules()
@@ -66,6 +69,7 @@ OUTPUT_DIR = Path(os.getenv("OUTPUT_DIR", "./data/protobuf/vehicle_telemetry"))
 FLUSH_MAX_MESSAGES = int(os.getenv("FLUSH_MAX_MESSAGES", "5000"))
 FLUSH_INTERVAL_SECONDS = float(os.getenv("FLUSH_INTERVAL_SECONDS", "60"))
 MESSAGE_TYPE = os.getenv("MESSAGE_TYPE", "vehicle.v1.VehicleTelemetry")
+CONTROL_NAME = os.getenv("CONTROL_NAME", "protobuf-consumer")
 
 
 def publish_descriptor_set() -> None:
@@ -136,6 +140,9 @@ def main() -> None:
     signal.signal(signal.SIGINT, stop)
     signal.signal(signal.SIGTERM, stop)
 
+    # Pause/resume from the control panel (see common/kafka_control.py).
+    pauser = ConsumerPauser(ControlState(BOOTSTRAP_SERVERS, CONTROL_NAME))
+
     print(f"Consuming '{TOPIC}' from {BOOTSTRAP_SERVERS} as group '{GROUP_ID}', writing protobuf files to {OUTPUT_DIR}")
     # One batch per date: each becomes one file.
     batches: dict[date, kafka_record_pb2.KafkaRecordBatch] = defaultdict(kafka_record_pb2.KafkaRecordBatch)
@@ -154,6 +161,7 @@ def main() -> None:
 
     try:
         while running:
+            pauser.apply(consumer)
             for msg in consumer.consume(num_messages=500, timeout=1.0):
                 if msg.error():
                     if msg.error().code() != KafkaError._PARTITION_EOF:

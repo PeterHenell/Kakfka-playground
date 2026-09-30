@@ -4,3 +4,4 @@
 -r schema/requirements.txt
 confluent-kafka==2.6.1
 requests==2.32.3
+flask==3.1.2

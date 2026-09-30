@@ -48,6 +48,7 @@ Check progress with `docker compose ps` and `docker compose logs -f producer con
 
 | Service       | URL                        | What it is                                      |
 |---------------|----------------------------|-------------------------------------------------|
+| Control panel | http://localhost:8090      | Pause/resume components, produced/consumed/lag  |
 | Kibana        | http://localhost:5601      | Explore the stored telemetry                    |
 | Kafka UI      | http://localhost:8080      | Topics, decoded messages, consumer groups       |
 | Elasticsearch | http://localhost:9200      | REST API for the stored data                    |
@@ -57,6 +58,30 @@ Check progress with `docker compose ps` and `docker compose logs -f producer con
 Stop everything with `docker compose down`. Add `-v` to also delete the stored
 Kafka and Elasticsearch data. The protobuf files and the Spark tables are in
 `./data`; delete that folder to start over.
+
+### The control panel
+
+http://localhost:8090 shows, per component, whether it's running, and for
+the topic and each consumer group:
+
+- **Produced**: messages written to the topic (the sum of its end offsets).
+- **Consumed**: messages a consumer group has committed (the sum of its
+  committed offsets).
+- **Not consumed**: the difference, the group's *lag*, also as a chart over
+  the last 10 minutes and per partition in a table.
+
+Each component has a **Pause** button. The panel writes the desired state to
+the compacted `playground-control` topic, and the components follow it
+(`common/kafka_control.py`):
+
+- The producer stops sending.
+- A consumer calls Kafka's `consumer.pause()` on its partitions. It keeps
+  polling, so it stays in its consumer group (no rebalance), but gets no
+  messages until it's resumed. Its lag grows meanwhile, and it catches up
+  after resuming.
+
+Because the topic is compacted, the state survives restarts: a paused
+component that restarts stays paused.
 
 ### Looking at the data in Kibana
 
@@ -95,6 +120,8 @@ project to Databricks as a Databricks Asset Bundle.
 | `schema/telemetry_schema/`             | Shared code: finding message classes, protobuf to Elasticsearch   |
 | `producer/producer.py`                 | Vehicle simulator, publishes to Kafka                             |
 | `producer/send_invalid.py`             | Publishes a few invalid messages, to see the dbt source tests fail |
+| `control-panel/`                       | The control panel: a Flask app (`app.py`) and one HTML page       |
+| `common/kafka_control.py`              | Pause/resume through the `playground-control` topic              |
 | `consumer/consumer.py`                 | Reads from Kafka, posts batches to Logstash                       |
 | `protobuf-consumer/protobuf_consumer.py` | Reads from Kafka, writes binary protobuf files to `./data/protobuf` |
 | `dbt/`                                 | dbt project (Spark locally) and Databricks Asset Bundle           |
@@ -303,6 +330,7 @@ python schema/generate.py          # again after every .proto change
 python producer/producer.py
 python consumer/consumer.py
 python protobuf-consumer/protobuf_consumer.py
+python control-panel/app.py        # http://localhost:8090
 ```
 
 The scripts are configured with environment variables. The docstring at the
@@ -321,13 +349,16 @@ The converters have unit tests: `pip install pytest && python -m pytest schema/t
    message, independently. Add a third group by running
    `KAFKA_GROUP_ID=my-group python consumer/consumer.py`. The new group gets
    its own copy of every message, starting from the beginning of the topic.
-3. **Consumer lag.** Stop the consumer (`docker compose stop consumer`), wait a
-   minute, and look at the lag of the `elk-writer` group in Kafka UI or with:
+3. **Consumer lag.** Pause the ELK consumer in the [control panel](http://localhost:8090),
+   wait a minute, and watch the lag of the `elk-writer` group grow. It's also
+   in Kafka UI, or on the command line:
    ```bash
    docker exec kafka /opt/kafka/bin/kafka-consumer-groups.sh \
      --bootstrap-server localhost:9092 --describe --group elk-writer
    ```
-   Start it again and watch it catch up. Compare with `protobuf-writer`: its lag
+   Resume it and watch it catch up. Then try stopping the container instead
+   (`docker compose stop consumer`): the group becomes *Empty*, and when it
+   starts again Kafka rebalances. Compare with `protobuf-writer`: its lag
    grows for up to a minute and then drops to 0, because it only commits after
    writing a file.
 4. **Kafka CLI tools.** The broker image comes with the standard tools:

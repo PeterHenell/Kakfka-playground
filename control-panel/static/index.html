@@ -1,0 +1,514 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kafka control panel</title>
+<link rel="icon" href="data:,">
+<style>
+  .viz-root {
+    color-scheme: light;
+    --page: #f9f9f7;
+    --surface-1: #fcfcfb;
+    --text-primary: #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted: #898781;
+    --grid: #e1e0d9;
+    --baseline: #c3c2b7;
+    --border: rgba(11, 11, 11, 0.10);
+    --series-1: #2a78d6;
+    --series-2: #eb6834;
+    --series-3: #1baf7a;
+    --series-4: #eda100;
+    --series-5: #e87ba4;
+    --series-6: #008300;
+    --series-7: #4a3aa7;
+    --series-8: #e34948;
+    --status-good: #0ca30c;
+    --status-warning: #fab219;
+    --status-serious: #ec835a;
+    --button-bg: #0b0b0b;
+    --button-text: #ffffff;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) .viz-root {
+      color-scheme: dark;
+      --page: #0d0d0d;
+      --surface-1: #1a1a19;
+      --text-primary: #ffffff;
+      --text-secondary: #c3c2b7;
+      --grid: #2c2c2a;
+      --baseline: #383835;
+      --border: rgba(255, 255, 255, 0.10);
+      --series-1: #3987e5;
+      --series-2: #d95926;
+      --series-3: #199e70;
+      --series-4: #c98500;
+      --series-5: #d55181;
+      --series-6: #008300;
+      --series-7: #9085e9;
+      --series-8: #e66767;
+      --button-bg: #ffffff;
+      --button-text: #0b0b0b;
+    }
+  }
+  :root[data-theme="dark"] .viz-root {
+    color-scheme: dark;
+    --page: #0d0d0d;
+    --surface-1: #1a1a19;
+    --text-primary: #ffffff;
+    --text-secondary: #c3c2b7;
+    --grid: #2c2c2a;
+    --baseline: #383835;
+    --border: rgba(255, 255, 255, 0.10);
+    --series-1: #3987e5;
+    --series-2: #d95926;
+    --series-3: #199e70;
+    --series-4: #c98500;
+    --series-5: #d55181;
+    --series-6: #008300;
+    --series-7: #9085e9;
+    --series-8: #e66767;
+    --button-bg: #ffffff;
+    --button-text: #0b0b0b;
+  }
+
+  * { box-sizing: border-box; }
+  body { margin: 0; }
+  .viz-root {
+    min-height: 100vh;
+    background: var(--page);
+    color: var(--text-primary);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    font-size: 14px;
+    line-height: 1.45;
+    padding: 24px 16px 48px;
+  }
+  .wrap { max-width: 1120px; margin: 0 auto; display: grid; gap: 16px; }
+  header { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 16px; }
+  h1 { font-size: 20px; font-weight: 600; margin: 0; }
+  h2 { font-size: 15px; font-weight: 600; margin: 0; }
+  .muted { color: var(--text-muted); }
+  .secondary { color: var(--text-secondary); }
+  .card {
+    background: var(--surface-1);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px;
+    min-width: 0;
+  }
+  .banner { padding: 10px 14px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-1); }
+  .banner[hidden] { display: none; }
+
+  /* Component cards */
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
+  .component { display: grid; gap: 12px; align-content: start; }
+  .component-head { display: flex; justify-content: space-between; align-items: start; gap: 8px; }
+  .component-head p { margin: 2px 0 0; }
+  .status { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; white-space: nowrap; }
+  .status svg { flex: none; }
+  .group-line { display: flex; align-items: center; gap: 6px; }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 12px; }
+  .tile-label { color: var(--text-secondary); }
+  .tile-value { font-size: 28px; font-weight: 600; line-height: 1.15; }
+  .tile-sub { color: var(--text-muted); font-size: 13px; }
+  button.toggle {
+    justify-self: start;
+    font: inherit;
+    font-weight: 600;
+    padding: 7px 14px;
+    border-radius: 8px;
+    border: 1px solid var(--button-bg);
+    background: var(--button-bg);
+    color: var(--button-text);
+    cursor: pointer;
+  }
+  button.toggle.resume { background: transparent; color: var(--text-primary); border-color: var(--baseline); }
+  button.toggle:disabled { opacity: 0.5; cursor: progress; }
+  button.toggle:focus-visible, .chart:focus-visible { outline: 2px solid var(--series-1); outline-offset: 2px; }
+
+  /* Chart */
+  .chart-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px 16px; align-items: baseline; }
+  .legend { display: flex; flex-wrap: wrap; gap: 4px 16px; list-style: none; margin: 8px 0 0; padding: 0; }
+  .legend li { display: inline-flex; align-items: center; gap: 6px; color: var(--text-secondary); }
+  .key { display: inline-block; width: 14px; height: 2px; border-radius: 1px; }
+  .chart-wrap { position: relative; margin-top: 8px; }
+  .chart { display: block; width: 100%; height: 260px; outline: none; }
+  .chart text { fill: var(--text-muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .tooltip {
+    position: absolute; top: 0; pointer-events: none;
+    background: var(--surface-1); border: 1px solid var(--border); border-radius: 8px;
+    padding: 8px 10px; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+    font-size: 13px; min-width: 150px; white-space: nowrap;
+  }
+  .tooltip[hidden] { display: none; }
+  .tooltip .when { color: var(--text-muted); margin-bottom: 4px; }
+  .tooltip .row { display: flex; align-items: center; gap: 8px; }
+  .tooltip strong { font-variant-numeric: tabular-nums; min-width: 48px; text-align: right; }
+  .tooltip .name { color: var(--text-secondary); }
+
+  /* Table */
+  .table-scroll { overflow-x: auto; margin-top: 8px; }
+  table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+  th, td { padding: 6px 10px; border-bottom: 1px solid var(--grid); text-align: right; white-space: nowrap; }
+  th:first-child, td:first-child { text-align: left; }
+  th { color: var(--text-secondary); font-weight: 600; }
+  details summary { cursor: pointer; font-weight: 600; }
+  footer { color: var(--text-secondary); }
+  footer p { margin: 4px 0; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }
+</style>
+</head>
+<body>
+<main class="viz-root">
+  <div class="wrap">
+    <header>
+      <div>
+        <h1>Kafka playground control panel</h1>
+        <div class="secondary">Topic <code id="topic">…</code></div>
+      </div>
+      <div class="muted" id="updated" aria-live="polite">Loading…</div>
+    </header>
+
+    <div class="banner" id="banner" role="status" hidden></div>
+
+    <section class="cards" id="cards" aria-label="Components"></section>
+
+    <section class="card" aria-labelledby="lag-title">
+      <div class="chart-head">
+        <h2 id="lag-title">Not consumed (lag) per consumer group</h2>
+        <span class="muted" id="chart-range">Messages · last 10 minutes</span>
+      </div>
+      <ul class="legend" id="legend"></ul>
+      <div class="chart-wrap" id="chart-wrap">
+        <svg class="chart" id="chart" tabindex="0" role="img" aria-labelledby="lag-title"></svg>
+        <div class="tooltip" id="tooltip" hidden></div>
+      </div>
+    </section>
+
+    <section class="card" aria-labelledby="table-title">
+      <details open>
+        <summary id="table-title">Offsets per consumer group and partition</summary>
+        <div class="table-scroll">
+          <table>
+            <thead><tr><th scope="col">Consumer group</th><th scope="col">Partition</th><th scope="col">Committed offset</th><th scope="col">End offset</th><th scope="col">Not consumed</th></tr></thead>
+            <tbody id="table-body"></tbody>
+          </table>
+        </div>
+      </details>
+    </section>
+
+    <footer>
+      <p><strong>Produced</strong> is the sum of the topic's end offsets: the offset each partition will give its next message.
+         <strong>Consumed</strong> is the sum of a consumer group's committed offsets, and <strong>not consumed</strong>
+         (the group's <em>lag</em>) is the difference.</p>
+      <p>Pausing writes to the compacted <code>playground-control</code> topic. The producer stops sending; a consumer calls
+         Kafka's <code>consumer.pause()</code>, so it stays in its group (no rebalance) and its lag grows until it's resumed.
+         The protobuf consumer only commits when it writes a file (every minute), so its lag rises and drops in steps.</p>
+    </footer>
+  </div>
+</main>
+
+<script>
+"use strict";
+const REFRESH_MS = 2000;
+const SERIES_SLOTS = 8;
+const fmt = new Intl.NumberFormat("en-US");
+const fmtRate = new Intl.NumberFormat("en-US", { maximumFractionDigits: 1, minimumFractionDigits: 1 });
+const $ = (id) => document.getElementById(id);
+const svgNs = "http://www.w3.org/2000/svg";
+
+let data = null;
+let pending = new Set();
+// Color follows the entity: a group keeps its slot for the whole session.
+const groupSlots = new Map();
+
+function slotFor(groupId) {
+  if (!groupSlots.has(groupId)) groupSlots.set(groupId, Math.min(groupSlots.size + 1, SERIES_SLOTS));
+  return groupSlots.get(groupId);
+}
+
+function el(tag, attrs = {}, ...children) {
+  const node = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === "class") node.className = v; else node.setAttribute(k, v);
+  }
+  for (const child of children) node.append(child instanceof Node ? child : document.createTextNode(String(child)));
+  return node;
+}
+
+function svg(tag, attrs = {}) {
+  const node = document.createElementNS(svgNs, tag);
+  for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, v);
+  return node;
+}
+
+// Status is never color alone: icon + label.
+function statusIcon(kind) {
+  const icon = svg("svg", { width: 14, height: 14, viewBox: "0 0 14 14", "aria-hidden": "true" });
+  if (kind === "running") {
+    icon.append(svg("circle", { cx: 7, cy: 7, r: 6, fill: "var(--status-good)" }));
+    icon.append(svg("path", { d: "M5.3 4.2 L10 7 L5.3 9.8 Z", fill: "#ffffff" }));
+  } else if (kind === "paused") {
+    icon.append(svg("circle", { cx: 7, cy: 7, r: 6, fill: "var(--status-warning)" }));
+    icon.append(svg("rect", { x: 4.5, y: 4, width: 1.8, height: 6, rx: 0.5, fill: "#0b0b0b" }));
+    icon.append(svg("rect", { x: 7.7, y: 4, width: 1.8, height: 6, rx: 0.5, fill: "#0b0b0b" }));
+  } else {
+    icon.append(svg("path", { d: "M7 1.5 L13 12.5 L1 12.5 Z", fill: "var(--status-serious)" }));
+    icon.append(svg("rect", { x: 6.3, y: 5, width: 1.4, height: 4, fill: "#0b0b0b" }));
+    icon.append(svg("rect", { x: 6.3, y: 10, width: 1.4, height: 1.4, fill: "#0b0b0b" }));
+  }
+  return icon;
+}
+
+function tile(label, value, sub) {
+  return el("div", {}, el("div", { class: "tile-label" }, label), el("div", { class: "tile-value" }, value), el("div", { class: "tile-sub" }, sub));
+}
+
+function groupStateText(group) {
+  if (!group) return { text: "No consumer group yet", ok: false };
+  if (group.members === 0) return { text: `Group ${group.id} · no consumer running`, ok: false };
+  const state = group.state.charAt(0) + group.state.slice(1).toLowerCase().replace(/_/g, " ");
+  return { text: `Group ${group.id} · ${state} · ${group.members} member${group.members === 1 ? "" : "s"}`, ok: true };
+}
+
+function renderCards() {
+  const cards = $("cards");
+  // Re-rendering replaces the buttons; keep keyboard focus on the same one.
+  const focused = document.activeElement && document.activeElement.dataset ? document.activeElement.dataset.component : null;
+  cards.replaceChildren();
+  for (const component of data.components) {
+    const group = data.groups.find((g) => g.id === component.group);
+    const status = el("span", { class: "status" }, statusIcon(component.paused ? "paused" : "running"), component.paused ? "Paused" : "Running");
+    const head = el("div", { class: "component-head" },
+      el("div", {}, el("h2", {}, component.label), el("p", { class: "muted" }, component.description)),
+      status);
+    const card = el("article", { class: "card component", "aria-label": component.label }, head);
+
+    if (component.group) {
+      const state = groupStateText(group);
+      const line = el("div", { class: "group-line secondary" });
+      if (!state.ok) line.append(statusIcon("warning"));
+      line.append(state.text);
+      card.append(line);
+      card.append(el("div", { class: "tiles" },
+        tile("Consumed", fmt.format(group ? group.consumed : 0), `${fmtRate.format(group ? group.consumed_rate : 0)} msg/s`),
+        tile("Not consumed", fmt.format(group ? group.lag : 0), "lag")));
+    } else {
+      card.append(el("div", { class: "group-line secondary" }, `${data.partitions.length} partitions`));
+      card.append(el("div", { class: "tiles" },
+        tile("Produced", fmt.format(data.produced), `${fmtRate.format(data.produced_rate)} msg/s`),
+        tile("Kept in Kafka", fmt.format(data.retained), "not yet deleted by retention")));
+    }
+
+    const action = component.paused ? "resume" : "pause";
+    const button = el("button", { class: `toggle ${action}`, type: "button" }, component.paused ? "Resume" : "Pause");
+    button.setAttribute("aria-label", `${component.paused ? "Resume" : "Pause"} ${component.label}`);
+    button.dataset.component = component.name;
+    button.disabled = pending.has(component.name);
+    button.addEventListener("click", () => toggle(component.name, action));
+    card.append(button);
+    cards.append(card);
+    if (focused === component.name) button.focus();
+  }
+}
+
+async function toggle(name, action) {
+  pending.add(name);
+  renderCards();
+  try {
+    await fetch(`/api/components/${encodeURIComponent(name)}/${action}`, { method: "POST" });
+  } finally {
+    pending.delete(name);
+    await refresh();
+  }
+}
+
+function renderTable() {
+  const body = $("table-body");
+  body.replaceChildren();
+  for (const group of data.groups) {
+    for (const row of group.partitions) {
+      body.append(el("tr", {},
+        el("td", {}, group.id),
+        el("td", {}, row.partition),
+        el("td", {}, row.committed === null ? "none" : fmt.format(row.committed)),
+        el("td", {}, fmt.format(row.end)),
+        el("td", {}, fmt.format(row.lag))));
+    }
+  }
+}
+
+// ---- Lag chart ---------------------------------------------------------
+let chartGeom = null;
+let focusIndex = null;
+
+function niceMax(value) {
+  if (value <= 5) return 5;
+  const exp = Math.pow(10, Math.floor(Math.log10(value)));
+  for (const step of [1, 2, 2.5, 5, 10]) if (step * exp >= value) return step * exp;
+  return 10 * exp;
+}
+
+function timeLabel(t) {
+  return new Date(t * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+
+function renderChart() {
+  const chart = $("chart");
+  const history = data.history;
+  const groups = data.groups.map((g) => g.id);
+  groups.forEach(slotFor);
+
+  // Legend: line keys (the marks are lines), text in ink.
+  const legend = $("legend");
+  legend.replaceChildren();
+  for (const id of groups) {
+    const key = el("span", { class: "key" });
+    key.style.background = `var(--series-${slotFor(id)})`;
+    const group = data.groups.find((g) => g.id === id);
+    legend.append(el("li", {}, key, `${id} · ${fmt.format(group.lag)}`));
+  }
+
+  const width = chart.clientWidth || 600;
+  const height = chart.clientHeight || 260;
+  const m = { top: 12, right: 16, bottom: 26, left: 52 };
+  const innerW = Math.max(10, width - m.left - m.right);
+  const innerH = height - m.top - m.bottom;
+  chart.setAttribute("viewBox", `0 0 ${width} ${height}`);
+  chart.replaceChildren();
+
+  if (history.length < 2) {
+    chartGeom = null;
+    const t = svg("text", { x: m.left, y: m.top + 20 });
+    t.textContent = "Collecting samples…";
+    chart.append(t);
+    return;
+  }
+
+  const t0 = history[0].t;
+  const t1 = history[history.length - 1].t;
+  const maxLag = Math.max(0, ...history.flatMap((h) => groups.map((g) => h.lag[g] ?? 0)));
+  const yMax = niceMax(maxLag);
+  const x = (t) => m.left + ((t - t0) / Math.max(1, t1 - t0)) * innerW;
+  const y = (v) => m.top + innerH - (v / yMax) * innerH;
+
+  // Gridlines + y ticks (clean numbers).
+  const ticks = 4;
+  for (let i = 0; i <= ticks; i++) {
+    const v = (yMax / ticks) * i;
+    chart.append(svg("line", { x1: m.left, x2: m.left + innerW, y1: y(v), y2: y(v), stroke: i === 0 ? "var(--baseline)" : "var(--grid)", "stroke-width": 1 }));
+    const label = svg("text", { x: m.left - 8, y: y(v) + 4, "text-anchor": "end" });
+    label.textContent = fmt.format(v);
+    chart.append(label);
+  }
+  // X ticks: start, middle, end.
+  for (const [t, anchor] of [[t0, "start"], [(t0 + t1) / 2, "middle"], [t1, "end"]]) {
+    const label = svg("text", { x: x(t), y: height - 6, "text-anchor": anchor });
+    label.textContent = timeLabel(t);
+    chart.append(label);
+  }
+
+  // One 2px line per group, end dot with a surface ring.
+  for (const id of groups) {
+    const points = history.filter((h) => id in h.lag).map((h) => [x(h.t), y(h.lag[id])]);
+    if (!points.length) continue;
+    const color = `var(--series-${slotFor(id)})`;
+    chart.append(svg("path", {
+      d: points.map((p, i) => `${i ? "L" : "M"}${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(""),
+      fill: "none", stroke: color, "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round",
+    }));
+    const last = points[points.length - 1];
+    chart.append(svg("circle", { cx: last[0], cy: last[1], r: 4, fill: color, stroke: "var(--surface-1)", "stroke-width": 2 }));
+  }
+
+  // Crosshair (drawn on hover/focus).
+  const crosshair = svg("line", { y1: m.top, y2: m.top + innerH, stroke: "var(--baseline)", "stroke-width": 1, visibility: "hidden" });
+  chart.append(crosshair);
+  chartGeom = { x, y, m, innerW, groups, crosshair };
+  if (focusIndex !== null) showPoint(Math.min(focusIndex, history.length - 1));
+}
+
+function showPoint(index) {
+  if (!chartGeom || !data) return;
+  focusIndex = index;
+  const point = data.history[index];
+  const px = chartGeom.x(point.t);
+  chartGeom.crosshair.setAttribute("x1", px);
+  chartGeom.crosshair.setAttribute("x2", px);
+  chartGeom.crosshair.setAttribute("visibility", "visible");
+
+  const tooltip = $("tooltip");
+  tooltip.replaceChildren(el("div", { class: "when" }, timeLabel(point.t)));
+  for (const id of chartGeom.groups) {
+    const key = el("span", { class: "key" });
+    key.style.background = `var(--series-${slotFor(id)})`;
+    const value = id in point.lag ? fmt.format(point.lag[id]) : "–";
+    tooltip.append(el("div", { class: "row" }, key, el("strong", {}, value), el("span", { class: "name" }, id)));
+  }
+  tooltip.hidden = false;
+  const wrap = $("chart-wrap").getBoundingClientRect();
+  const left = px + 12 + tooltip.offsetWidth > wrap.width ? px - 12 - tooltip.offsetWidth : px + 12;
+  tooltip.style.left = `${Math.max(0, left)}px`;
+}
+
+function hidePoint() {
+  focusIndex = null;
+  $("tooltip").hidden = true;
+  if (chartGeom) chartGeom.crosshair.setAttribute("visibility", "hidden");
+}
+
+function nearestIndex(clientX) {
+  const rect = $("chart").getBoundingClientRect();
+  const px = clientX - rect.left;
+  let best = 0;
+  data.history.forEach((h, i) => {
+    if (Math.abs(chartGeom.x(h.t) - px) < Math.abs(chartGeom.x(data.history[best].t) - px)) best = i;
+  });
+  return best;
+}
+
+$("chart").addEventListener("pointermove", (e) => { if (chartGeom) showPoint(nearestIndex(e.clientX)); });
+$("chart").addEventListener("pointerleave", hidePoint);
+$("chart").addEventListener("focus", () => { if (data) showPoint(data.history.length - 1); });
+$("chart").addEventListener("blur", hidePoint);
+$("chart").addEventListener("keydown", (e) => {
+  if (!data || focusIndex === null) return;
+  if (e.key === "ArrowLeft") { showPoint(Math.max(0, focusIndex - 1)); e.preventDefault(); }
+  if (e.key === "ArrowRight") { showPoint(Math.min(data.history.length - 1, focusIndex + 1)); e.preventDefault(); }
+});
+window.addEventListener("resize", () => { if (data && data.ready) renderChart(); });
+
+// ---- Refresh loop -------------------------------------------------------
+async function refresh() {
+  try {
+    const response = await fetch("/api/overview", { cache: "no-store" });
+    const next = await response.json();
+    $("topic").textContent = next.topic;
+    const banner = $("banner");
+    if (!next.ready || next.error) {
+      banner.hidden = false;
+      banner.textContent = next.ready ? `Kafka: ${next.error}` : `Waiting for Kafka… (${next.error})`;
+    } else {
+      banner.hidden = true;
+    }
+    if (!next.ready) return;
+    data = next;
+    const minutes = Math.round((data.history[data.history.length - 1].t - data.history[0].t) / 60);
+    $("chart-range").textContent = `Messages · last ${minutes <= 1 ? "minute" : `${minutes} minutes`}`;
+    $("updated").textContent = `Updated ${new Date(data.sampled_at * 1000).toLocaleTimeString()}`;
+    renderCards();
+    renderChart();
+    renderTable();
+  } catch (e) {
+    const banner = $("banner");
+    banner.hidden = false;
+    banner.textContent = "Can't reach the control panel server.";
+  }
+}
+
+refresh();
+setInterval(refresh, REFRESH_MS);
+</script>
+</body>
+</html>

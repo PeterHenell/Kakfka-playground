@@ -22,6 +22,7 @@ Configuration (environment variables):
     KAFKA_PARTITIONS         default: 3   (only used when creating the topic)
     NUM_VEHICLES             default: 5
     INTERVAL_SECONDS         default: 1.0 (time between ticks)
+    CONTROL_NAME             default: producer (its name in the control panel)
 """
 
 import math
@@ -37,6 +38,8 @@ from confluent_kafka import KafkaException, Producer
 from confluent_kafka.admin import AdminClient, NewTopic
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "schema"))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "common"))
+from kafka_control import ControlState  # noqa: E402
 from telemetry_schema.registry import load_generated_modules  # noqa: E402
 
 load_generated_modules()
@@ -47,6 +50,7 @@ TOPIC = os.getenv("KAFKA_TOPIC", "vehicle-telemetry")
 PARTITIONS = int(os.getenv("KAFKA_PARTITIONS", "3"))
 NUM_VEHICLES = int(os.getenv("NUM_VEHICLES", "5"))
 INTERVAL_SECONDS = float(os.getenv("INTERVAL_SECONDS", "1.0"))
+CONTROL_NAME = os.getenv("CONTROL_NAME", "producer")
 
 # Vehicles start somewhere around central Stockholm.
 START_LAT, START_LON = 59.3293, 18.0686
@@ -209,8 +213,19 @@ def main() -> None:
     signal.signal(signal.SIGTERM, stop)
 
     print(f"Producing telemetry for {NUM_VEHICLES} vehicles to '{TOPIC}' on {BOOTSTRAP_SERVERS} every {INTERVAL_SECONDS}s")
+    # Pause/resume from the control panel (see common/kafka_control.py).
+    control = ControlState(BOOTSTRAP_SERVERS, CONTROL_NAME)
+    was_paused = False
     sent = 0
     while running:
+        paused = control.paused()
+        if paused != was_paused:
+            print("Paused by the control panel" if paused else "Resumed by the control panel")
+            was_paused = paused
+        if paused:
+            producer.poll(0)
+            time.sleep(0.5)
+            continue
         for vehicle in vehicles:
             message = vehicle.tick(INTERVAL_SECONDS)
             producer.produce(

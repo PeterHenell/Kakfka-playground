@@ -9,6 +9,8 @@ RUN pip install --no-cache-dir -r schema/requirements.txt -r producer/requiremen
 # the image (docker compose up -d --build) picks up schema changes.
 COPY schema/ schema/
 RUN python schema/generate.py
+# Pause/resume from the control panel.
+COPY common/ common/
 COPY producer/producer.py producer/producer.py
 # -u: unbuffered output so prints show up in `docker compose logs` immediately
 CMD ["python", "-u", "producer/producer.py"]
