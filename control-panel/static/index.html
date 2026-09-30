@@ -269,8 +269,6 @@ function statusIcon(kind) {
   } else if (kind === "up") {
     icon.append(svg("circle", { cx: 7, cy: 7, r: 6, fill: "var(--status-good)" }));
     icon.append(svg("path", { d: "M4.2 7.2 L6.2 9.2 L9.9 5", fill: "none", stroke: "#ffffff", "stroke-width": 1.6, "stroke-linecap": "round", "stroke-linejoin": "round" }));
-  } else if (kind === "idle") {
-    icon.append(svg("circle", { cx: 7, cy: 7, r: 5.25, fill: "none", stroke: "var(--text-muted)", "stroke-width": 1.5 }));
   } else if (kind === "paused") {
     icon.append(svg("circle", { cx: 7, cy: 7, r: 6, fill: "var(--status-warning)" }));
     icon.append(svg("rect", { x: 4.5, y: 4, width: 1.8, height: 6, rx: 0.5, fill: "#0b0b0b" }));
@@ -543,9 +541,8 @@ async function refreshTools() {
     // Link to the host this page was opened on, so it also works from another machine.
     const url = `${location.protocol}//${location.hostname}:${tool.port}${tool.path}`;
     const link = el("a", { href: url, target: "_blank", rel: "noopener" }, tool.name);
-    const idle = !tool.up && tool.down_label === "No Spark session";
     const status = el("span", { class: "status" },
-      statusIcon(tool.up ? "up" : idle ? "idle" : "warning"), tool.up ? "Up" : tool.down_label);
+      statusIcon(tool.up ? "up" : "warning"), tool.up ? "Up" : tool.down_label);
     list.append(el("article", { class: "card tool" },
       el("div", { class: "tool-head" }, link, status),
       el("div", { class: "address" }, `${location.hostname}:${tool.port}`),

@@ -69,10 +69,10 @@ COMPONENT_GROUPS = {c["group"]: c["name"] for c in COMPONENTS if c["group"]}
 # panel checks `service:port` + `check_path` to show whether it's up.
 TOOLS = [
     {
-        "name": "JupyterLab",
-        "port": 8888, "path": "/lab", "service": "notebook", "check_path": "/api",
-        "uses": "Explore the data with Spark in notebooks: query the dbt tables, decode the raw "
-                "protobuf archive, and make charts. Start with explore_vehicle_telemetry.ipynb.",
+        "name": "Superset",
+        "port": 8088, "path": "/sqllab/", "service": "superset", "check_path": "/health",
+        "uses": "Browse the table catalog and query the dbt tables and raw sources with SQL on "
+                "Spark (SQL Lab), then build charts and dashboards. Log in with admin / admin.",
     },
     {
         "name": "Kibana",
@@ -88,10 +88,9 @@ TOOLS = [
     },
     {
         "name": "Spark UI",
-        "port": 4040, "path": "/", "service": "notebook", "check_path": "/",
-        "uses": "Watch the jobs of the notebook's Spark session: stages, timings, SQL query plans. "
-                "Only there while a notebook has a Spark session running.",
-        "down_label": "No Spark session",
+        "port": 4040, "path": "/", "service": "spark-thrift-server", "check_path": "/",
+        "uses": "Watch the Spark Thrift Server that runs Superset's queries: jobs, stages, "
+                "timings and SQL query plans.",
     },
     {
         "name": "Elasticsearch API",

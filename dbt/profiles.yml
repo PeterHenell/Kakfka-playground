@@ -7,7 +7,7 @@
 # but in Spark's own configuration:
 #   - In Docker, spark/spark-defaults.conf (SPARK_CONF_DIR): tables in
 #     /data/spark/warehouse, the catalog in the shared metastore-db Postgres,
-#     so dbt, spark-sql and notebooks can run at the same time.
+#     so dbt, spark-sql and the Spark Thrift Server can run at the same time.
 #   - On your machine without SPARK_CONF_DIR, Spark's defaults: tables in
 #     ./spark-warehouse and the catalog in an embedded Derby database in
 #     ./metastore_db, which only one Spark process can open at a time.
@@ -26,7 +26,8 @@ vehicle_telemetry:
         # from_protobuf lives in the spark-protobuf module, which isn't part
         # of PySpark. Spark downloads it from Maven Central on first use and
         # caches it in SPARK_IVY_DIR (must be an absolute path). The version
-        # must match the PySpark version in requirements.txt.
+        # must match the PySpark version in requirements.txt. (The Docker
+        # image also installs the jar, see spark/install-jars.py.)
         spark.jars.packages: org.apache.spark:spark-protobuf_2.13:4.2.0
         spark.jars.ivy: "{{ env_var('SPARK_IVY_DIR', env_var('HOME') ~ '/.ivy2') }}"
         spark.sql.session.timeZone: UTC

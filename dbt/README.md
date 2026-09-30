@@ -7,7 +7,7 @@ them into tables that are easy to analyse. The same project runs in two places:
   (dbt-spark's `session` method, i.e. PySpark). Tables are stored as Parquet
   files in `../data/spark/warehouse`, and the table catalog (the Hive
   metastore) in the `metastore-db` Postgres container, shared with the
-  `spark-sql` shell and the Jupyter notebooks.
+  `spark-sql` shell and the Spark Thrift Server that Superset queries.
 - **On Databricks**: deployed as a Databricks Asset Bundle (DAB), running on
   a SQL warehouse and reading the protobuf files from a Unity Catalog Volume.
 
@@ -96,8 +96,9 @@ after starting the stack before the first build. Run `build` again to pick up
 new data. Starting Spark takes a few seconds, so a build takes about half a
 minute.
 
-To explore the tables, open JupyterLab at http://localhost:8888 (see
-`notebooks/explore_vehicle_telemetry.ipynb`), or a Spark SQL shell:
+To explore the tables, open SQL Lab in Superset at
+http://localhost:8088/sqllab/ (admin / admin), which has a catalog browser, or
+a Spark SQL shell:
 
 ```bash
 docker compose run --rm spark-sql
@@ -105,16 +106,18 @@ spark-sql (default)> show tables in vehicle_telemetry;
 spark-sql (default)> select * from vehicle_telemetry.vehicle_latest_status;
 ```
 
-Both can run while dbt is running. Every Spark process (dbt, the shell, each
-notebook) keeps its table catalog in the `metastore-db` Postgres container:
+Both can run while dbt is running. Every Spark process (dbt, the shell, the
+Spark Thrift Server behind Superset) keeps its table catalog in the
+`metastore-db` Postgres container:
 
-- `spark/spark-defaults.conf` holds the shared Spark settings. The images
-  copy it to `/opt/spark-conf` and point `SPARK_CONF_DIR` at it.
+- `spark/spark-defaults.conf` holds the shared Spark settings. The image
+  copies it to `/opt/spark-conf` and points `SPARK_CONF_DIR` at it.
 - `metastore/init/*.sql` is Hive's metastore schema for Postgres, created
   when the container first starts. (Letting Spark create it lazily deadlocks.)
 - The Hive metastore client looks for the Postgres JDBC driver on Spark's
-  own classpath, so the images download it into PySpark's `jars` folder
-  (`spark/install-postgres-driver.py`).
+  own classpath, so the image downloads it into PySpark's `jars` folder
+  (`spark/install-jars.py`). The same goes for spark-protobuf
+  (`from_protobuf`), which the Thrift Server can't load any other way.
 
 By default Spark would keep the catalog in an embedded Derby database, which
 only one process can open at a time.
@@ -137,11 +140,11 @@ dbt build
 
 ### Troubleshooting
 
-**The notebook says `SCHEMA_NOT_FOUND` for `vehicle_telemetry`, but dbt and
-`spark-sql` work.** dbt and `spark-sql` are probably still running an image
+**Superset doesn't show the `vehicle_telemetry` schema (or Spark says
+`SCHEMA_NOT_FOUND`), but dbt and `spark-sql` work.** dbt and `spark-sql` are probably still running an image
 from before the shared catalog, which keeps its own Derby catalog in
 `./data/spark/metastore_db`: the tables exist there, but not in the shared
-catalog the notebook reads. `docker compose up --build` doesn't rebuild them,
+catalog Superset reads. `docker compose up --build` doesn't rebuild them,
 because they're in the `dbt` profile. Their services now set
 `pull_policy: build`, so `docker compose run` rebuilds the image each time
 (quick, thanks to the build cache). If you still have an old image, rebuild
