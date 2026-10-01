@@ -13,6 +13,7 @@ make dbt ARGS="test --select source:raw"   # any dbt command, e.g. only the gene
 make spark                   # spark-sql shell on the shared catalog
 make invalid                 # publish invalid messages so the dbt source tests fail
 make clean                   # down -v and delete ./data (all Kafka/ES/Superset/Spark state)
+make dab-validate            # also dab-deploy, dab-upload, dab-run: the Databricks bundle (settings in gitignored databricks.mk)
 make                         # list all targets
 ```
 
@@ -44,7 +45,7 @@ There is no linter config. UIs: control panel :8090 (links to everything), Super
 - All Spark processes (dbt in-process session mode, `spark-sql`, `spark-thrift-server`) share one Hive metastore in the `metastore-db` Postgres, configured in `spark/spark-defaults.conf` (copied into the image as `SPARK_CONF_DIR`). That is what lets them run concurrently. The metastore schema is pre-created by `metastore/init/*.sql`; `datanucleus.schema.autoCreateAll` must stay false (lazy creation deadlocks).
 - The Postgres JDBC driver and spark-protobuf are installed into PySpark's own `jars` folder (`spark/install-jars.py`), not via `spark.jars.packages`: the metastore client and the Thrift Server's per-query class loader can't see packages-loaded jars. Keep the spark-protobuf version equal to the PySpark version.
 - `dbt`, `spark-sql` and `spark-thrift-server` all use the `kafka-playground-dbt` image built from `dbt/Dockerfile`; `dbt` and `spark-sql` are in the `dbt` Compose profile with `pull_policy: build` (because `up --build` skips profiled services).
-- `dbt/profiles.yml` is for local/Docker Spark; `dbt/dbt_profiles/profiles.yml` + `dbt/databricks.yml` + `dbt/resources/` are the Databricks Asset Bundle, which runs the same models on a SQL warehouse against a Unity Catalog Volume.
+- `dbt/profiles.yml` is for local/Docker Spark; `dbt/databricks.yml` + `dbt/resources/` are the Databricks Asset Bundle, which runs the same models on a SQL warehouse against a Unity Catalog Volume. The job's dbt task sets `warehouse_id`, so Databricks generates the dbt profile itself (target `databricks_cluster`, catalog/schema from the task); don't pass `--target` or add a `profiles_directory`.
 
 ## Superset
 

@@ -8,3 +8,8 @@ data/
 schema/generated/
 # Spark's embedded metastore log
 derby.log
+# Databricks CLI bundle state, and local secrets (bundle deploy skips ignored files)
+.databricks/
+# Personal settings for the Databricks targets in the Makefile
+databricks.mk
+*token*.txt

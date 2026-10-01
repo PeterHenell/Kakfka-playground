@@ -12,7 +12,8 @@
 #     ./spark-warehouse and the catalog in an embedded Derby database in
 #     ./metastore_db, which only one Spark process can open at a time.
 #
-# The Databricks job uses dbt_profiles/profiles.yml instead.
+# The Databricks job doesn't use this file: Databricks writes its own
+# profile for the job (see resources/vehicle_telemetry.job.yml).
 vehicle_telemetry:
   target: dev
   outputs:

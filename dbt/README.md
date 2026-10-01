@@ -167,7 +167,6 @@ Files involved:
 | `resources/vehicle_telemetry.schema.yml` | Creates the Unity Catalog schema                                              |
 | `resources/raw.volume.yml`               | Creates the `raw` volume that holds the protobuf files                        |
 | `resources/vehicle_telemetry.job.yml`    | A job with a dbt task that runs `dbt build` on serverless compute every hour  |
-| `dbt_profiles/profiles.yml`              | The dbt profile the job uses; Databricks provides the host and token          |
 
 Requirements: the [Databricks CLI](https://docs.databricks.com/dev-tools/cli/install.html),
 a workspace with Unity Catalog, and a SQL warehouse.
@@ -201,6 +200,18 @@ a workspace with Unity Catalog, and a SQL warehouse.
    databricks bundle run vehicle_telemetry_dbt_job
    ```
    The models end up as tables and views in the same schema.
+
+From the repository root, the Makefile has shortcuts for these steps:
+`make dab-validate`, `make dab-deploy`, `make dab-upload` (finds the volume
+path for you) and `make dab-run`. Put your own bundle variables in a
+`databricks.mk` file next to the Makefile (it's gitignored), for example:
+
+```make
+CATALOG = workspace              # Databricks Free Edition has no `main` catalog
+WAREHOUSE_ID = 1234567890abcdef  # the last part of the warehouse's HTTP path
+```
+
+Add `DAB_TARGET=prod` to a `make` command to use the `prod` target.
 
 Deploy to production with `databricks bundle deploy -t prod`. That deploys
 the schema as plain `vehicle_telemetry`, with the hourly schedule active.

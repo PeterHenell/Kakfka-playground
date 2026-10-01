@@ -14,15 +14,15 @@ resources:
           environment_key: dbt
           dbt_task:
             project_directory: ../
-            # Databricks profiles; ../profiles.yml is only for local Spark runs.
-            profiles_directory: dbt_profiles/
+            # With a warehouse_id, Databricks writes its own profiles.yml for
+            # this run (target `databricks_cluster`) with the warehouse and the
+            # catalog and schema below. ../profiles.yml is only for local Spark.
             warehouse_id: ${var.warehouse_id}
+            catalog: ${var.catalog}
+            schema: ${resources.schemas.vehicle_telemetry.name}
             commands:
               - >-
-                dbt build --target=${bundle.target} --vars '{
-                "catalog": "${var.catalog}",
-                "schema": "${resources.schemas.vehicle_telemetry.name}",
-                "http_path": "/sql/1.0/warehouses/${var.warehouse_id}",
+                dbt build --vars '{
                 "raw_path": "/Volumes/${var.catalog}/${resources.schemas.vehicle_telemetry.name}/${resources.volumes.raw.name}/vehicle_telemetry",
                 "descriptor_path": "/Volumes/${var.catalog}/${resources.schemas.vehicle_telemetry.name}/${resources.volumes.raw.name}/vehicle_telemetry/_schema/descriptor_set.desc"
                 }'
