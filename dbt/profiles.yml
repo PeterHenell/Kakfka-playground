@@ -25,11 +25,16 @@ vehicle_telemetry:
       threads: 1
       server_side_parameters:
         # from_protobuf lives in the spark-protobuf module, which isn't part
-        # of PySpark. Spark downloads it from Maven Central on first use and
-        # caches it in SPARK_IVY_DIR (must be an absolute path). The version
-        # must match the PySpark version in requirements.txt. (The Docker
-        # image also installs the jar, see spark/install-jars.py.)
-        spark.jars.packages: org.apache.spark:spark-protobuf_2.13:4.2.0
+        # of PySpark, and Delta Lake (the table format Databricks uses; the
+        # incremental model and the snapshot need it) isn't either. Outside
+        # Docker, Spark downloads both from Maven Central on first use and
+        # caches them in SPARK_IVY_DIR (must be an absolute path). The Docker
+        # image (SPARK_CONF_DIR is set) already has the jars, see
+        # spark/install-jars.py. spark-protobuf must match the PySpark version
+        # in requirements.txt; Delta 4.4.x is for Spark 4.2.
+        spark.jars.packages: "{{ '' if env_var('SPARK_CONF_DIR', '') else 'org.apache.spark:spark-protobuf_2.13:4.2.0,io.delta:delta-spark_2.13:4.4.0' }}"
+        spark.sql.extensions: io.delta.sql.DeltaSparkSessionExtension
+        spark.sql.catalog.spark_catalog: org.apache.spark.sql.delta.catalog.DeltaCatalog
         spark.jars.ivy: "{{ env_var('SPARK_IVY_DIR', env_var('HOME') ~ '/.ivy2') }}"
         spark.sql.session.timeZone: UTC
         spark.ui.enabled: "false"

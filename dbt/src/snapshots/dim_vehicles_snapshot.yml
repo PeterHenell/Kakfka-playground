@@ -1,0 +1,14 @@
+# Keeps the history of dim_vehicles: `dbt snapshot` (and `dbt build`) adds a
+# new version of a vehicle's row whenever it changed, and closes the old one.
+# Each version has dbt_valid_from and dbt_valid_to; the current one has
+# dbt_valid_to = null. This is a slowly changing dimension of type 2.
+snapshots:
+  - name: dim_vehicles_snapshot
+    relation: ref('dim_vehicles')
+    description: Every version of each vehicle's row in dim_vehicles.
+    config:
+      unique_key: vehicle_id
+      # A row has changed when last_seen_at is newer, i.e. the vehicle sent
+      # new readings. (strategy: check compares chosen columns instead.)
+      strategy: timestamp
+      updated_at: last_seen_at

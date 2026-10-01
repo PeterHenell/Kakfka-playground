@@ -1,5 +1,8 @@
 # vehicle_telemetry dbt project
 
+New to dbt? [LEARN_DBT.md](LEARN_DBT.md) is a one-hour walkthrough of the dbt
+concepts, using this project as the example.
+
 Decodes the binary protobuf files written by the protobuf consumer and turns
 them into tables that are easy to analyse. The same project runs in two places:
 
@@ -16,9 +19,9 @@ Both are Spark SQL, so the models are the same SQL in both places.
 ## Sources and models
 
 ```
-source raw.vehicle_telemetry_records ──> stg_vehicle_telemetry ──┬──> dim_vehicles           one row per vehicle
+source raw.vehicle_telemetry_records ──> stg_vehicle_telemetry ──┬──> dim_vehicles           one row per vehicle ──> dim_vehicles_snapshot (its history)
 (view over the protobuf files;           (view: decoded,        ├──> fct_vehicle_daily      distance and health per vehicle and day
- generated schema tests)                  flattened, de-dup.)   ├──> fct_vehicle_events     one row per event (harsh_braking, …)
+ generated schema tests)                  flattened, de-dup.)   ├──> fct_vehicle_events     one row per event (harsh_braking, …), incremental
                                                                  └──> vehicle_latest_status  latest reading per vehicle
 ```
 
@@ -70,8 +73,20 @@ dbt on your machine, regenerate it yourself after a schema change:
   Protobuf can decode older messages with a newer schema; fields that didn't
   exist yet get their default value.
 - `from_protobuf` is part of the spark-protobuf module, which PySpark doesn't
-  include. Spark downloads it from Maven Central on the first run (see
-  `spark.jars.packages` in `profiles.yml`). Databricks has it built in.
+  include. The Docker image installs it; running dbt on your machine, Spark
+  downloads it from Maven Central on the first run (see `spark.jars.packages`
+  in `profiles.yml`). Databricks has it built in.
+- The marts are Delta tables (`+file_format: delta` in `dbt_project.yml`), as
+  on Databricks. Locally, Delta Lake is installed the same way as
+  spark-protobuf.
+- `fct_vehicle_events` is *incremental*: each run only adds the events from
+  Kafka records it hasn't seen yet (a higher offset than the highest one in
+  the table, per partition), and merges on `event_id`, so a message delivered
+  twice doesn't add a second row. `dbt build --full-refresh` rebuilds it.
+- `dim_vehicles_snapshot` (`src/snapshots/`) is a *snapshot* of
+  `dim_vehicles`: every run adds a new version of the vehicles that sent new
+  readings, with `dbt_valid_from`/`dbt_valid_to`. It holds the only copy of
+  that history, so `make clean` loses it.
 - Reading the files is the only part that differs between local Spark and
   Databricks, so that macro (`raw_protobuf_files()`) is *dispatched*: dbt
   picks the Spark or the Databricks implementation depending on the adapter.
@@ -110,14 +125,16 @@ Both can run while dbt is running. Every Spark process (dbt, the shell, the
 Spark Thrift Server behind Superset) keeps its table catalog in the
 `metastore-db` Postgres container:
 
-- `spark/spark-defaults.conf` holds the shared Spark settings. The image
-  copies it to `/opt/spark-conf` and points `SPARK_CONF_DIR` at it.
+- `spark/spark-defaults.conf` holds the shared Spark settings (including
+  Delta Lake), and `spark/log4j2.properties` the logging settings. The image
+  copies them to `/opt/spark-conf` and points `SPARK_CONF_DIR` at it.
 - `metastore/init/*.sql` is Hive's metastore schema for Postgres, created
   when the container first starts. (Letting Spark create it lazily deadlocks.)
 - The Hive metastore client looks for the Postgres JDBC driver on Spark's
   own classpath, so the image downloads it into PySpark's `jars` folder
   (`spark/install-jars.py`). The same goes for spark-protobuf
-  (`from_protobuf`), which the Thrift Server can't load any other way.
+  (`from_protobuf`) and Delta Lake, which the Thrift Server can't load any
+  other way.
 
 By default Spark would keep the catalog in an embedded Derby database, which
 only one process can open at a time.
@@ -149,6 +166,12 @@ because they're in the `dbt` profile. Their services now set
 `pull_policy: build`, so `docker compose run` rebuilds the image each time
 (quick, thanks to the build cache). If you still have an old image, rebuild
 it once with `docker compose build dbt`, then run `docker compose run --rm dbt build`.
+
+**`UNRESOLVED_COLUMN` … `kafka_partition` in `fct_vehicle_events`**, or
+another error about an existing table after updating the project. The table
+was created by an older version of the model (before it was incremental and
+before the tables were Delta). Rebuild the models once with
+`docker compose run --rm dbt build --full-refresh`.
 
 **`LOCATION_ALREADY_EXISTS` when dbt creates a table.** The table's folder
 exists in `./data/spark/warehouse` but the catalog doesn't know the table,

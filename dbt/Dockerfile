@@ -7,11 +7,13 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 COPY dbt/requirements.txt /tmp/dbt-requirements.txt
 RUN pip install --no-cache-dir -r /tmp/dbt-requirements.txt
-# Shared Spark settings (catalog in the metastore-db Postgres), the Postgres
-# JDBC driver the catalog needs and spark-protobuf (from_protobuf).
+# Shared Spark settings (catalog in the metastore-db Postgres, Delta Lake,
+# logging), the Postgres JDBC driver the catalog needs, spark-protobuf
+# (from_protobuf) and Delta Lake.
 COPY spark/ /opt/spark-setup/
 RUN python /opt/spark-setup/install-jars.py \
-    && mkdir -p /opt/spark-conf && cp /opt/spark-setup/spark-defaults.conf /opt/spark-conf/
+    && mkdir -p /opt/spark-conf \
+    && cp /opt/spark-setup/spark-defaults.conf /opt/spark-setup/log4j2.properties /opt/spark-conf/
 ENV SPARK_CONF_DIR=/opt/spark-conf
 # The schema tools need a newer protobuf library than dbt, so they get their
 # own virtual environment.

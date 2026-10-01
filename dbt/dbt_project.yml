@@ -36,7 +36,14 @@ on-run-start:
 
 models:
   vehicle_telemetry:
+    # Delta Lake tables, as on Databricks. Incremental models that merge, and
+    # snapshots, need it.
+    +file_format: delta
     staging:
       +materialized: view
     marts:
       +materialized: table
+
+snapshots:
+  vehicle_telemetry:
+    +file_format: delta
