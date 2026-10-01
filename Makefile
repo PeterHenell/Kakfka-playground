@@ -1,9 +1,11 @@
 # Shortcuts for the Kafka playground. Run `make` to list them.
 #
-# Every target is a thin wrapper around docker compose; see README.md for
-# what the services do.
+# Every target is a thin wrapper around `podman compose` or `docker compose`;
+# see README.md for what the services do.
 
-COMPOSE ?= docker compose
+# Podman if it's installed, otherwise Docker. Override with e.g. ENGINE=docker.
+ENGINE ?= $(shell command -v podman >/dev/null 2>&1 && echo podman || echo docker)
+COMPOSE ?= $(ENGINE) compose
 # Extra flags for `make up` (e.g. UP_FLAGS= to start without rebuilding).
 UP_FLAGS ?= --build
 # Arguments for `make dbt`, e.g. make dbt ARGS="test --select source:raw".
@@ -49,5 +51,5 @@ invalid: ## Publish a few invalid messages, to see the dbt source tests fail
 clean: ## Stop everything and delete ALL data: Kafka, Elasticsearch, Superset, ./data
 	$(COMPOSE) --profile dbt down -v --remove-orphans
 	@# ./data is written by the containers (as root), so delete it from a container too.
-	docker run --rm -v "$(CURDIR):/work" postgres:16-alpine rm -rf /work/data
+	$(ENGINE) run --rm -v "$(CURDIR):/work" docker.io/library/postgres:16-alpine rm -rf /work/data
 	@echo "All data deleted. Start again with: make up"

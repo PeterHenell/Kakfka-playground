@@ -7,14 +7,16 @@ A Kafka learning playground: a Python producer simulates vehicles and publishes 
 ## Commands
 
 ```bash
-make up                      # docker compose up -d --build (Kafka, ELK, consumers, control panel, Superset)
-make dbt                     # docker compose run --rm dbt build
+make up                      # <engine> compose up -d --build (Kafka, ELK, consumers, control panel, Superset)
+make dbt                     # <engine> compose run --rm dbt build
 make dbt ARGS="test --select source:raw"   # any dbt command, e.g. only the generated source tests
 make spark                   # spark-sql shell on the shared catalog
 make invalid                 # publish invalid messages so the dbt source tests fail
 make clean                   # down -v and delete ./data (all Kafka/ES/Superset/Spark state)
 make                         # list all targets
 ```
+
+The maintainer runs the stack with **Podman** (`podman compose`, `podman logs <service>`). The Makefile picks `podman` when installed, else `docker` (override with `ENGINE=docker`). Keep the Compose file and Makefile working with both: no Docker-only features, and fully qualify images in commands run outside Compose (e.g. `docker.io/library/postgres:16-alpine`), because Podman may refuse short names. The docs say `docker compose`; translate to `podman compose` when giving the user commands.
 
 Unit tests (schema converters and the dbt test generator) run on the host and need the generated code first:
 
