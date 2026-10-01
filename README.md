@@ -37,12 +37,19 @@ Everything runs in a single Docker Compose project.
 
 ## Getting started
 
-Requirements: Docker with Docker Compose, and about 5 GB of free memory for
-the containers.
+Requirements: Docker with Docker Compose, or Podman with `podman compose`,
+and about 5 GB of free memory for the containers.
 
 ```bash
 make up          # or: docker compose up -d --build
 ```
+
+The Makefile uses Podman if it's installed, and Docker otherwise; choose with
+e.g. `make up ENGINE=docker`. With Podman, read `podman` wherever these docs
+say `docker` (`podman compose run --rm dbt build`, `podman exec kafka ...`).
+`podman compose` needs Podman's API socket: on macOS and Windows,
+`podman machine start` provides it; on Linux, run
+`systemctl --user enable --now podman.socket`.
 
 The first start takes a minute or two while Elasticsearch and Kibana boot.
 Check progress with `make ps` and `make logs`. Then open the control panel at
